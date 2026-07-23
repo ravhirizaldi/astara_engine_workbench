@@ -32,6 +32,10 @@ struct Context {
         main_deployed = false;
         fault_flags = 0;
         navigation_initialized = false;
+        launch_evidence_s = 0.0;
+        burnout_evidence_s = 0.0;
+        apogee_evidence_s = 0.0;
+        landing_evidence_s = 0.0;
     }
 
     AstaraFswConfig config;
@@ -45,7 +49,21 @@ struct Context {
     bool main_deployed{};
     uint32_t fault_flags{};
     bool navigation_initialized{};
+    double launch_evidence_s{};
+    double burnout_evidence_s{};
+    double apogee_evidence_s{};
+    double landing_evidence_s{};
 };
+
+bool persisted(
+    bool condition,
+    double dt_s,
+    double required_s,
+    double& evidence_s
+) {
+    evidence_s = condition ? evidence_s + std::max(dt_s, 0.0) : 0.0;
+    return evidence_s + 1e-12 >= required_s;
+}
 
 void normalize(std::array<double, 4>& quaternion) {
     double norm = 0.0;
@@ -169,9 +187,28 @@ void update_mode(Context& context, const AstaraSensorFrame& sensor) {
         context.mode = ASTARA_ARMED;
     } else if (context.config.body_role == 0 && context.mode == ASTARA_ARMED && sensor.time_s >= 0.05) {
         context.mode = ASTARA_IGNITION;
-    } else if (context.config.body_role == 0 && context.mode == ASTARA_IGNITION && sensor.time_s >= 0.15) {
+    } else if (
+        context.config.body_role == 0
+        && context.mode == ASTARA_IGNITION
+        && persisted(
+            sensor.acceleration_body_m_s2[0] > 2.0,
+            sensor.dt_s,
+            0.05,
+            context.launch_evidence_s
+        )
+    ) {
         context.mode = ASTARA_BOOST_1;
-    } else if (context.config.body_role == 0 && context.mode == ASTARA_BOOST_1 && sensor.time_s >= burn1) {
+    } else if (
+        context.config.body_role == 0
+        && context.mode == ASTARA_BOOST_1
+        && sensor.time_s >= burn1
+        && persisted(
+            sensor.acceleration_body_m_s2[0] < 2.0,
+            sensor.dt_s,
+            0.05,
+            context.burnout_evidence_s
+        )
+    ) {
         context.mode = ASTARA_SEPARATION;
     } else if (context.config.body_role == 0 && context.mode == ASTARA_SEPARATION && sensor.stage_separated) {
         context.mode = ASTARA_INTERSTAGE;
@@ -185,7 +222,12 @@ void update_mode(Context& context, const AstaraSensorFrame& sensor) {
         context.mode >= ASTARA_COAST
         && context.mode < ASTARA_APOGEE
         && context.altitude > 100.0
-        && context.vertical_velocity < -0.5
+        && persisted(
+            context.vertical_velocity < -0.5,
+            sensor.dt_s,
+            0.20,
+            context.apogee_evidence_s
+        )
     ) {
         context.mode = ASTARA_APOGEE;
         context.apogee_seen = true;
@@ -204,8 +246,13 @@ void update_mode(Context& context, const AstaraSensorFrame& sensor) {
     }
     if (
         context.main_deployed
-        && context.altitude <= 2.0
-        && std::abs(context.vertical_velocity) < 15.0
+        && persisted(
+            context.altitude <= 2.0
+                && std::abs(context.vertical_velocity) < 15.0,
+            sensor.dt_s,
+            1.0,
+            context.landing_evidence_s
+        )
     ) {
         context.mode = ASTARA_LANDED;
     }

@@ -390,6 +390,12 @@ def validate_scenario(scenario: dict[str, Any]) -> None:
                         f"{mass_prefix}[{row_index}].inertia_kg_m2 requires three positive values"
                     )
         aerodynamics = stage.get("aerodynamics", {})
+        if not isinstance(
+            aerodynamics.get("movable_fins_enabled", False), bool
+        ):
+            raise ValueError(
+                f"{prefix}.aerodynamics.movable_fins_enabled must be boolean"
+            )
         coefficient_table = aerodynamics.get("coefficient_table")
         if coefficient_table is not None:
             _validate_table(
@@ -445,6 +451,22 @@ def validate_scenario(scenario: dict[str, Any]) -> None:
 
     sensors = scenario.get("sensors", {})
     _positive(sensors, ("imu_rate_hz", "barometer_rate_hz", "gnss_rate_hz"), "sensors")
+    for name in (
+        "accelerometer_noise_m_s2",
+        "gyro_noise_rad_s",
+        "barometer_noise_m",
+        "gnss_position_noise_m",
+        "gnss_velocity_noise_m_s",
+        "dynamic_pressure_noise_pa",
+        "engine_health_noise_percent",
+    ):
+        value = sensors.get(name)
+        if (
+            not isinstance(value, (int, float))
+            or value < 0.0
+            or not math.isfinite(value)
+        ):
+            raise ValueError(f"sensors.{name} must be finite and nonnegative")
     fsw_step_s = 1.0 / float(sensors["imu_rate_hz"])
     if simulation["time_step_s"] > fsw_step_s + 1e-12:
         raise ValueError(

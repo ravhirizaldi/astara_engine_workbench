@@ -29,10 +29,25 @@ int main() {
     sensor.engine_health_percent = 100.0;
     sensor.magnetic_body[0] = 1.0;
 
+    sensor.time_s = 0.0;
+    assert(astara_fsw_step(handle, &sensor, &output) == 0);
+    sensor.time_s = 0.05;
+    assert(astara_fsw_step(handle, &sensor, &output) == 0);
+    sensor.time_s = 0.10;
+    sensor.acceleration_body_m_s2[0] = 10.0;
+    assert(astara_fsw_step(handle, &sensor, &output) == 0);
+    assert(output.mode == ASTARA_IGNITION);
+    sensor.time_s = 0.105;
+    sensor.acceleration_body_m_s2[0] = 0.0;
+    assert(astara_fsw_step(handle, &sensor, &output) == 0);
+    assert(output.mode == ASTARA_IGNITION);
+    astara_fsw_reset(handle);
+
     for (int step = 0; step < 180; ++step) {
         sensor.time_s = step * sensor.dt_s;
         sensor.barometric_altitude_m = step * 0.5;
         sensor.vertical_velocity_m_s = 50.0;
+        sensor.acceleration_body_m_s2[0] = sensor.time_s < 1.0 ? 10.0 : 0.0;
         if (sensor.time_s > 1.25) {
             sensor.stage_separated = 1;
         }

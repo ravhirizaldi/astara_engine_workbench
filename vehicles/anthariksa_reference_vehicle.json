@@ -88,6 +88,7 @@
         "aerodynamics": {
           "fin_count": 4,
           "fin_area_m2": 0.085,
+          "movable_fins_enabled": false,
           "base_drag_coefficient": 0.4,
           "center_of_pressure_m": 3.25,
           "induced_drag_factor": 1.8,
@@ -195,8 +196,9 @@
           ]
         },
         "aerodynamics": {
-          "fin_count": 4,
-          "fin_area_m2": 0.055,
+          "fin_count": 0,
+          "fin_area_m2": 0.0,
+          "movable_fins_enabled": false,
           "base_drag_coefficient": 0.36,
           "center_of_pressure_m": 2.55,
           "induced_drag_factor": 1.8,
@@ -232,7 +234,9 @@
     "gyro_noise_rad_s": 0.0015,
     "barometer_noise_m": 1.5,
     "gnss_position_noise_m": 2.5,
-    "gnss_velocity_noise_m_s": 0.15
+    "gnss_velocity_noise_m_s": 0.15,
+    "dynamic_pressure_noise_pa": 30.0,
+    "engine_health_noise_percent": 0.25
   },
   "actuators": {
     "max_tvc_deg": 6.0,

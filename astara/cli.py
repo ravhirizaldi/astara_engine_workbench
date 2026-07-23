@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .analysis import run_credibility_analysis
 from .flight_core import build_library
+from .replay import replay_fsw
 from .scenario import default_scenario_path, load_scenario, validate_scenario
 from .twin import run_simulation
 
@@ -39,6 +40,15 @@ def _parser() -> argparse.ArgumentParser:
     analyze.add_argument("--seed", type=int)
     analyze.add_argument("--output", default="runs")
 
+    replay = commands.add_parser(
+        "replay", help="replay a recorded sensors.csv through the C++ flight core"
+    )
+    replay.add_argument("sensor_log")
+    replay.add_argument(
+        "--scenario", default=str(default_scenario_path())
+    )
+    replay.add_argument("--output")
+
     commands.add_parser("build-fsw", help="build the C++ flight core")
     return parser
 
@@ -52,6 +62,9 @@ def main(argv: list[str] | None = None) -> int:
     if arguments.command == "validate":
         validate_scenario(scenario)
         print(json.dumps({"valid": True, "scenario": scenario["name"]}))
+        return 0
+    if arguments.command == "replay":
+        print(replay_fsw(scenario, arguments.sensor_log, arguments.output))
         return 0
     if arguments.command == "analyze":
         output_dir = run_credibility_analysis(

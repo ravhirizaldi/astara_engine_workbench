@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import ctypes
+import gzip
 import hashlib
 import json
 import math
@@ -16,7 +17,14 @@ import numpy as np
 
 from . import __version__
 from .aero import AeroResult, atmosphere, estimate
-from .flight_core import MODE_NAMES, FlightCore, FswOutput, SensorFrame
+from .flight_core import (
+    MODE_NAMES,
+    SENSOR_CSV_FIELDS,
+    FlightCore,
+    FswOutput,
+    SensorFrame,
+    sensor_frame_to_row,
+)
 from .math3d import (
     EARTH_MU,
     EARTH_RADIUS_M,
@@ -207,7 +215,6 @@ def _sensor_frame(
     sensors = scenario["sensors"]
     altitude = float(np.linalg.norm(body.position_ecef_m) - np.linalg.norm(launch_position))
     up = unit(body.position_ecef_m)
-    vertical_velocity = float(np.dot(body.velocity_ecef_m_s, up))
     acceleration = (
         body.last_specific_force_body_m_s2
         + rng.normal(0.0, sensors["accelerometer_noise_m_s2"], 3)
@@ -257,6 +264,20 @@ def _sensor_frame(
             gnss_position += float(fault.get("value", 0.0))
         elif name == "imu" and kind == "bias":
             gyro += float(fault.get("value", 0.0))
+    vertical_velocity = float(np.dot(gnss_velocity, up))
+    dynamic_pressure = max(
+        0.0,
+        body.last_dynamic_pressure_pa
+        + float(rng.normal(0.0, sensors.get("dynamic_pressure_noise_pa", 0.0))),
+    )
+    engine_health = min(
+        100.0,
+        max(
+            0.0,
+            body.engine_health_percent
+            + float(rng.normal(0.0, sensors.get("engine_health_noise_percent", 0.0))),
+        ),
+    )
     return SensorFrame(
         time_s,
         dt_s,
@@ -267,8 +288,8 @@ def _sensor_frame(
         (ctypes.c_double * 3)(*gnss_position),
         (ctypes.c_double * 3)(*gnss_velocity),
         vertical_velocity,
-        body.last_dynamic_pressure_pa,
-        body.engine_health_percent,
+        dynamic_pressure,
+        engine_health,
         gnss_valid,
         barometer_valid,
         int(separated),
@@ -284,6 +305,7 @@ def _run_fsw_substeps(
     launch_position: np.ndarray,
     separated: bool,
     current_output: FswOutput,
+    on_sensor: Callable[[str, SensorFrame], None] | None = None,
 ) -> FswOutput:
     fsw_step_s = 1.0 / float(scenario["sensors"]["imu_rate_hz"])
     output = current_output
@@ -297,6 +319,8 @@ def _run_fsw_substeps(
             launch_position,
             separated,
         )
+        if on_sensor:
+            on_sensor(body.name, frame)
         output = core.step(frame)
         body.next_fsw_sample_s += fsw_step_s
     return output
@@ -429,26 +453,38 @@ def _actuator_commands(
 ) -> tuple[np.ndarray, np.ndarray]:
     max_tvc = math.radians(scenario["actuators"]["max_tvc_deg"])
     max_fin = math.radians(scenario["actuators"]["max_fin_deg"])
+    movable_fins_enabled = body.stage.get("aerodynamics", {}).get(
+        "movable_fins_enabled", False
+    )
     target_tvc = np.clip(
         np.array([output.tvc_pitch_rad, output.tvc_yaw_rad]), -max_tvc, max_tvc
     )
-    target_fin_rad = np.clip(
-        np.array([output.fin_roll_rad, output.fin_pitch_rad, output.fin_yaw_rad]),
-        -max_fin,
-        max_fin,
+    target_fin_rad = (
+        np.clip(
+            np.array(
+                [output.fin_roll_rad, output.fin_pitch_rad, output.fin_yaw_rad]
+            ),
+            -max_fin,
+            max_fin,
+        )
+        if movable_fins_enabled
+        else np.zeros(3)
     )
     tvc_fault = _fault_active(scenario, body.name, "tvc", time_s)
     fin_fault = _fault_active(scenario, body.name, "fin", time_s)
     if tvc_fault and tvc_fault.get("type") == "stuck":
         target_tvc[:] = math.radians(float(tvc_fault.get("value_deg", 0.0)))
-    if fin_fault and fin_fault.get("type") == "stuck":
+    if movable_fins_enabled and fin_fault and fin_fault.get("type") == "stuck":
         target_fin_rad[:] = math.radians(float(fin_fault.get("value_deg", 0.0)))
     max_delta = math.radians(scenario["actuators"]["max_rate_deg_s"]) * dt_s
     tvc = body.last_tvc_rad + np.clip(
         target_tvc - body.last_tvc_rad, -max_delta, max_delta
     )
-    fin_rad = body.last_fin_rad + np.clip(
-        target_fin_rad - body.last_fin_rad, -max_delta, max_delta
+    fin_rad = (
+        body.last_fin_rad
+        + np.clip(target_fin_rad - body.last_fin_rad, -max_delta, max_delta)
+        if movable_fins_enabled
+        else np.zeros(3)
     )
     body.last_tvc_rad = tvc
     body.last_fin_rad = fin_rad
@@ -823,6 +859,22 @@ def run_simulation(
     previous_modes: dict[str, int] = {}
     time_s = 0.0
     cancelled = False
+    sensor_file = None
+    sensor_writer = None
+    if persist:
+        sensor_file = gzip.open(
+            output_dir / "sensors.csv.gz",
+            "wt",
+            newline="",
+            encoding="utf-8",
+            compresslevel=1,
+        )
+        sensor_writer = csv.DictWriter(sensor_file, fieldnames=SENSOR_CSV_FIELDS)
+        sensor_writer.writeheader()
+
+    def record_sensor(body_name: str, frame: SensorFrame) -> None:
+        if sensor_writer is not None:
+            sensor_writer.writerow(sensor_frame_to_row(body_name, frame))
 
     try:
         while time_s <= max_time_s:
@@ -847,6 +899,7 @@ def run_simulation(
                     launch_position,
                     separated,
                     outputs[body.name],
+                    record_sensor,
                 )
                 outputs[body.name] = output
                 previous_mode = previous_modes.get(body.name)
@@ -911,6 +964,7 @@ def run_simulation(
                         launch_position,
                         True,
                         FswOutput(),
+                        record_sensor,
                     )
 
             current_values: dict[str, tuple[float, float, float]] = {}
@@ -1021,6 +1075,8 @@ def run_simulation(
     finally:
         for core in cores.values():
             core.close()
+        if sensor_file is not None:
+            sensor_file.close()
 
     invalid_rows = sum(not row["aero_valid"] for row in telemetry)
     invalid_pre_recovery_rows = sum(
@@ -1134,7 +1190,13 @@ def run_simulation(
         _write_csv(output_dir / "truth.csv", telemetry)
         _write_csv(output_dir / "fsw.csv", fsw_rows)
         _write_csv(output_dir / "events.csv", events)
-        artifact_names = ["scenario.json", "truth.csv", "fsw.csv", "events.csv"]
+        artifact_names = [
+            "scenario.json",
+            "sensors.csv.gz",
+            "truth.csv",
+            "fsw.csv",
+            "events.csv",
+        ]
         if vehicle_document is not None:
             artifact_names.append("vehicle_definition.json")
         for filename in artifact_names:

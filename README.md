@@ -50,7 +50,7 @@ Create and activate a virtual environment:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.lock
 ```
 
 ## Run
@@ -84,7 +84,7 @@ Each mission creates a unique `runs/` directory containing:
 - `scenario.json` and a SHA-256 scenario identity
 - `vehicle_definition.json` as the self-contained stable vehicle snapshot
 - `manifest.json` with model version, seed, frames, checks, and artifact hashes
-- `truth.csv`, `fsw.csv`, and `events.csv`
+- `truth.csv`, `sensors.csv.gz`, `fsw.csv`, and `events.csv`
 - `rocketpy_reference.json` with an optional independent powered-ascent comparison
 - `report.pdf` and analysis PNGs
 
@@ -97,6 +97,16 @@ The `analyze` command creates a separate credibility bundle containing:
 
 The C++ flight core receives simulated sensor data only. It has no serial,
 network, GPIO, ignition, valve, pyrotechnic, or flight-termination interfaces.
+
+Replay a recorded sensor stream through the same C++ flight core:
+
+```bash
+python3 -m astara replay runs/<run>/sensors.csv.gz
+```
+
+See `docs/REQUIREMENTS.md` for requirement-to-test links,
+`docs/SCENARIO_CATALOG.md` for current qualification cases, and
+`docs/ARCHITECTURE.md` for the current data and process boundaries.
 
 ## Scenario and Vehicle Definition
 

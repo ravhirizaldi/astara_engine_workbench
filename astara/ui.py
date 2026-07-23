@@ -6,7 +6,9 @@ import json
 import multiprocessing as mp
 import os
 import queue
+import shutil
 import subprocess
+import threading
 import time
 from collections import deque
 from pathlib import Path
@@ -82,10 +84,12 @@ class AstaraWorkbench:
         self.process_context = mp.get_context("spawn")
         self.cancel_event = self.process_context.Event()
         self.pause_event = self.process_context.Event()
-        self.speed_value = self.process_context.Value("d", 0.0)
+        self.speed_value = self.process_context.Value("d", 0.0, lock=False)
         self.process_messages = self.process_context.Queue(maxsize=32)
         self.simulation_process = None
-        self.live_lock = mp.Lock()
+        self.live_lock = threading.Lock()
+        self._closing = False
+        self._refresh_after_id = None
         self.live_rows: deque[dict] = deque(maxlen=6000)
         self.live_events: list[dict] = []
         self.latest_by_body: dict[str, dict] = {}
@@ -150,8 +154,49 @@ class AstaraWorkbench:
         self.canvas = FigureCanvasTkAgg(self.figure, master=self.plot_host)
         self.canvas.get_tk_widget().pack(fill="both", expand=True)
         self._load_preview()
-        self.root.after(250, self._refresh_live)
+        self._refresh_after_id = self.root.after(250, self._refresh_live)
         self.root.protocol("WM_DELETE_WINDOW", self._close)
+
+    def _json_viewer(self, parent):
+        frame = self.ttk.Frame(parent)
+        text = self.tk.Text(
+            frame, wrap="none", height=32, font=("TkFixedFont", 10)
+        )
+        vertical = self.ttk.Scrollbar(frame, orient="vertical", command=text.yview)
+        horizontal = self.ttk.Scrollbar(
+            frame, orient="horizontal", command=text.xview
+        )
+        text.configure(
+            yscrollcommand=vertical.set,
+            xscrollcommand=horizontal.set,
+        )
+        text.grid(row=0, column=0, sticky="nsew")
+        vertical.grid(row=0, column=1, sticky="ns")
+        horizontal.grid(row=1, column=0, sticky="ew")
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(0, weight=1)
+        return frame, text
+
+    def _copy_json(self, text, label: str) -> None:
+        value = text.get("1.0", "end-1c")
+        try:
+            clip = shutil.which("clip.exe") if self.is_wsl else None
+            if clip:
+                subprocess.run(
+                    [clip],
+                    input=value,
+                    text=True,
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                )
+            else:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(value)
+        except Exception as error:
+            self.status_var.set(f"Could not copy {label}: {error}")
+            return
+        self.status_var.set(f"{label} copied to clipboard")
 
     def _build_scenario_tab(self) -> None:
         ttk = self.ttk
@@ -159,7 +204,7 @@ class AstaraWorkbench:
             self.scenario_tab,
             text="Anthariksa Mission Scenario",
             font=("TkDefaultFont", 15, "bold"),
-        ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 12))
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 12))
         ttk.Entry(self.scenario_tab, textvariable=self.path_var).grid(
             row=1, column=0, sticky="ew"
         )
@@ -169,12 +214,15 @@ class AstaraWorkbench:
         ttk.Button(self.scenario_tab, text="Validate", command=self._load_preview).grid(
             row=1, column=2
         )
-        self.scenario_text = self.tk.Text(
-            self.scenario_tab, wrap="none", height=32, font=("TkFixedFont", 10)
-        )
-        self.scenario_text.grid(
+        scenario_viewer, self.scenario_text = self._json_viewer(self.scenario_tab)
+        scenario_viewer.grid(
             row=2, column=0, columnspan=3, sticky="nsew", pady=(12, 0)
         )
+        ttk.Button(
+            self.scenario_tab,
+            text="Copy JSON",
+            command=lambda: self._copy_json(self.scenario_text, "Scenario JSON"),
+        ).grid(row=0, column=2, sticky="e", pady=(0, 12))
         self.scenario_tab.columnconfigure(0, weight=1)
         self.scenario_tab.rowconfigure(2, weight=1)
 
@@ -185,17 +233,17 @@ class AstaraWorkbench:
             text="Stable Vehicle Definition",
             font=("TkDefaultFont", 15, "bold"),
         ).grid(row=0, column=0, sticky="w", pady=(0, 6))
+        ttk.Button(
+            self.vehicle_tab,
+            text="Copy JSON",
+            command=lambda: self._copy_json(self.vehicle_text, "Vehicle JSON"),
+        ).grid(row=0, column=1, sticky="e", pady=(0, 6))
         ttk.Label(
             self.vehicle_tab,
             textvariable=self.vehicle_path_var,
-        ).grid(row=1, column=0, sticky="w", pady=(0, 12))
-        self.vehicle_text = self.tk.Text(
-            self.vehicle_tab,
-            wrap="none",
-            height=32,
-            font=("TkFixedFont", 10),
-        )
-        self.vehicle_text.grid(row=2, column=0, sticky="nsew")
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 12))
+        vehicle_viewer, self.vehicle_text = self._json_viewer(self.vehicle_tab)
+        vehicle_viewer.grid(row=2, column=0, columnspan=2, sticky="nsew")
         self.vehicle_tab.columnconfigure(0, weight=1)
         self.vehicle_tab.rowconfigure(2, weight=1)
 
@@ -535,6 +583,8 @@ class AstaraWorkbench:
         result.events.clear()
 
     def _refresh_live(self) -> None:
+        if self._closing:
+            return
         for _ in range(64):
             try:
                 kind, payload = self.process_messages.get_nowait()
@@ -549,6 +599,7 @@ class AstaraWorkbench:
 
         if self.simulation_process is not None and not self.simulation_process.is_alive():
             self.simulation_process.join()
+            self.simulation_process.close()
             self.simulation_process = None
 
         now = time.perf_counter()
@@ -573,7 +624,7 @@ class AstaraWorkbench:
         if rows:
             self._plot_rows(rows)
             self._last_plot_wall = now
-        self.root.after(250, self._refresh_live)
+        self._refresh_after_id = self.root.after(250, self._refresh_live)
 
     def _update_metrics(self, latest: dict) -> None:
         self.metric_vars["time"].set(f"{latest['time_s']:.1f} s")
@@ -717,8 +768,23 @@ class AstaraWorkbench:
             self.status_var.set(f"Could not open output folder: {error}")
 
     def _close(self) -> None:
+        if self._closing:
+            return
+        self._closing = True
         self.cancel_event.set()
         self.pause_event.clear()
+        if self._refresh_after_id is not None:
+            self.root.after_cancel(self._refresh_after_id)
+            self._refresh_after_id = None
+        if self.simulation_process is not None:
+            self.simulation_process.join(timeout=5.0)
+            if self.simulation_process.is_alive():
+                self.simulation_process.terminate()
+                self.simulation_process.join()
+            self.simulation_process.close()
+            self.simulation_process = None
+        self.process_messages.close()
+        self.process_messages.join_thread()
         self.root.destroy()
 
 
@@ -733,6 +799,9 @@ def show_workbench(legacy_app_class=None) -> bool:
         root = tk.Tk()
     except tk.TclError:
         return False
-    AstaraWorkbench(root, legacy_app_class)
-    root.mainloop()
+    app = AstaraWorkbench(root, legacy_app_class)
+    try:
+        root.mainloop()
+    finally:
+        app._close()
     return True

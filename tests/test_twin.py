@@ -1,14 +1,40 @@
+import csv
+import gzip
 import json
 import math
 import tempfile
 import unittest
 from pathlib import Path
 
+import numpy as np
+
+from astara.flight_core import FswOutput
 from astara.scenario import default_scenario, load_scenario, scenario_hash
-from astara.twin import run_simulation
+from astara.twin import Body, _actuator_commands, run_simulation
 
 
 class TwinTests(unittest.TestCase):
+    def test_fixed_fins_do_not_accept_fsw_commands(self) -> None:
+        scenario = default_scenario()
+        stage = scenario["vehicle"]["stages"][0]
+        body = Body(
+            name="integrated_stack",
+            stage_index=0,
+            stage=stage,
+            position_ecef_m=np.zeros(3),
+            velocity_ecef_m_s=np.zeros(3),
+            attitude_wxyz=np.array([1.0, 0.0, 0.0, 0.0]),
+            body_rates_rad_s=np.zeros(3),
+            fuel_kg=stage["fuel_mass_kg"],
+            oxidizer_kg=stage["oxidizer_mass_kg"],
+        )
+        output = FswOutput()
+        output.fin_roll_rad = output.fin_pitch_rad = output.fin_yaw_rad = 0.1
+
+        _, fins = _actuator_commands(output, scenario, body, 0.0, 0.1)
+
+        self.assertTrue(np.array_equal(fins, np.zeros(3)))
+
     def test_multi_engine_telemetry_and_engine_cutoff(self) -> None:
         scenario = default_scenario()
         scenario["simulation"]["max_time_s"] = 0.5
@@ -140,6 +166,20 @@ class TwinTests(unittest.TestCase):
             self.assertTrue((Path(first.output_dir) / "manifest.json").exists())
             self.assertTrue(
                 (Path(first.output_dir) / "vehicle_definition.json").exists()
+            )
+            sensor_path = Path(first.output_dir) / "sensors.csv.gz"
+            self.assertTrue(sensor_path.exists())
+            self.assertIn("sensors.csv.gz", first.manifest["artifacts"])
+            with gzip.open(
+                sensor_path, "rt", newline="", encoding="utf-8"
+            ) as file:
+                sensor_rows = list(csv.DictReader(file))
+            self.assertTrue(sensor_rows)
+            self.assertTrue(
+                any(
+                    abs(float(row["engine_health_percent"]) - 100.0) > 1e-9
+                    for row in sensor_rows
+                )
             )
             reloaded = load_scenario(Path(first.output_dir) / "scenario.json")
             self.assertEqual(

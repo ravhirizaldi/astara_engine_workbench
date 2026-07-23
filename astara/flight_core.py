@@ -6,6 +6,7 @@ import ctypes
 import math
 import subprocess
 from pathlib import Path
+from typing import Mapping
 
 from .scenario import resolve_mission_events
 
@@ -83,6 +84,104 @@ MODE_NAMES = (
     "LANDED",
     "ABORT",
 )
+
+SENSOR_CSV_FIELDS = (
+    "body",
+    "time_s",
+    "dt_s",
+    "acceleration_x_m_s2",
+    "acceleration_y_m_s2",
+    "acceleration_z_m_s2",
+    "gyro_x_rad_s",
+    "gyro_y_rad_s",
+    "gyro_z_rad_s",
+    "magnetic_x",
+    "magnetic_y",
+    "magnetic_z",
+    "barometric_altitude_m",
+    "gnss_position_x_m",
+    "gnss_position_y_m",
+    "gnss_position_z_m",
+    "gnss_velocity_x_m_s",
+    "gnss_velocity_y_m_s",
+    "gnss_velocity_z_m_s",
+    "vertical_velocity_m_s",
+    "dynamic_pressure_pa",
+    "engine_health_percent",
+    "gnss_valid",
+    "barometer_valid",
+    "stage_separated",
+)
+
+
+def sensor_frame_to_row(body: str, frame: SensorFrame) -> dict[str, float | int | str]:
+    return {
+        "body": body,
+        "time_s": frame.time_s,
+        "dt_s": frame.dt_s,
+        "acceleration_x_m_s2": frame.acceleration_body_m_s2[0],
+        "acceleration_y_m_s2": frame.acceleration_body_m_s2[1],
+        "acceleration_z_m_s2": frame.acceleration_body_m_s2[2],
+        "gyro_x_rad_s": frame.gyro_body_rad_s[0],
+        "gyro_y_rad_s": frame.gyro_body_rad_s[1],
+        "gyro_z_rad_s": frame.gyro_body_rad_s[2],
+        "magnetic_x": frame.magnetic_body[0],
+        "magnetic_y": frame.magnetic_body[1],
+        "magnetic_z": frame.magnetic_body[2],
+        "barometric_altitude_m": frame.barometric_altitude_m,
+        "gnss_position_x_m": frame.gnss_position_ecef_m[0],
+        "gnss_position_y_m": frame.gnss_position_ecef_m[1],
+        "gnss_position_z_m": frame.gnss_position_ecef_m[2],
+        "gnss_velocity_x_m_s": frame.gnss_velocity_ecef_m_s[0],
+        "gnss_velocity_y_m_s": frame.gnss_velocity_ecef_m_s[1],
+        "gnss_velocity_z_m_s": frame.gnss_velocity_ecef_m_s[2],
+        "vertical_velocity_m_s": frame.vertical_velocity_m_s,
+        "dynamic_pressure_pa": frame.dynamic_pressure_pa,
+        "engine_health_percent": frame.engine_health_percent,
+        "gnss_valid": frame.gnss_valid,
+        "barometer_valid": frame.barometer_valid,
+        "stage_separated": frame.stage_separated,
+    }
+
+
+def sensor_frame_from_row(row: Mapping[str, str]) -> SensorFrame:
+    vector = ctypes.c_double * 3
+    return SensorFrame(
+        float(row["time_s"]),
+        float(row["dt_s"]),
+        vector(
+            float(row["acceleration_x_m_s2"]),
+            float(row["acceleration_y_m_s2"]),
+            float(row["acceleration_z_m_s2"]),
+        ),
+        vector(
+            float(row["gyro_x_rad_s"]),
+            float(row["gyro_y_rad_s"]),
+            float(row["gyro_z_rad_s"]),
+        ),
+        vector(
+            float(row["magnetic_x"]),
+            float(row["magnetic_y"]),
+            float(row["magnetic_z"]),
+        ),
+        float(row["barometric_altitude_m"]),
+        vector(
+            float(row["gnss_position_x_m"]),
+            float(row["gnss_position_y_m"]),
+            float(row["gnss_position_z_m"]),
+        ),
+        vector(
+            float(row["gnss_velocity_x_m_s"]),
+            float(row["gnss_velocity_y_m_s"]),
+            float(row["gnss_velocity_z_m_s"]),
+        ),
+        float(row["vertical_velocity_m_s"]),
+        float(row["dynamic_pressure_pa"]),
+        float(row["engine_health_percent"]),
+        int(row["gnss_valid"]),
+        int(row["barometer_valid"]),
+        int(row["stage_separated"]),
+    )
 
 
 def build_library() -> Path:
