@@ -1,0 +1,3 @@
+numpy
+matplotlib
+rocketpy>=1.13,<2

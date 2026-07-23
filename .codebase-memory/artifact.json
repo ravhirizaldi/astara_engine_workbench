@@ -1,0 +1,11 @@
+{
+    "schema_version": 2,
+    "commit": "HEAD",
+    "indexed_at": "2026-07-23T08:19:02Z",
+    "project": "home-ravhi-c-1_engine-astara",
+    "nodes": 530,
+    "edges": 2056,
+    "original_size": 3735552,
+    "compressed_size": 626915,
+    "compression_level": 3
+}

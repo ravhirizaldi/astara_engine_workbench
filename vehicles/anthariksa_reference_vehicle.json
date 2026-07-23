@@ -1,0 +1,244 @@
+{
+  "schema_version": "astara.vehicle.v1",
+  "name": "Anthariksa reference vehicle",
+  "engine_family": "Cendrawasih",
+  "vehicle": {
+    "stages": [
+      {
+        "name": "Core Stage",
+        "dry_mass_kg": 105.0,
+        "fuel_mass_kg": 36.0,
+        "oxidizer_mass_kg": 90.0,
+        "length_m": 5.2,
+        "diameter_m": 0.42,
+        "center_of_mass_m": 2.7,
+        "inertia_kg_m2": [5.8, 310.0, 310.0],
+        "mass_properties": [
+          {
+            "propellant_fraction": 0.0,
+            "center_of_mass_m": 2.45,
+            "inertia_kg_m2": [3.5, 170.0, 170.0]
+          },
+          {
+            "propellant_fraction": 0.5,
+            "center_of_mass_m": 2.58,
+            "inertia_kg_m2": [4.65, 240.0, 240.0]
+          },
+          {
+            "propellant_fraction": 1.0,
+            "center_of_mass_m": 2.7,
+            "inertia_kg_m2": [5.8, 310.0, 310.0]
+          }
+        ],
+        "engines": [
+          {
+            "id": "cendrawasih-core-01",
+            "model": "Cendrawasih Core-01",
+            "position_body_m": [0.0, 0.0, 0.0],
+            "direction_body": [1.0, 0.0, 0.0],
+            "performance_scale": 1.0,
+            "enabled": true,
+            "gimbal_enabled": true
+          }
+        ],
+        "propulsion": {
+          "burn_duration_s": 8.0,
+          "fuel_flow_kg_s": 4.4,
+          "oxidizer_flow_kg_s": 11.0,
+          "c_star_m_s": 1650.0,
+          "thrust_coefficient": 1.42,
+          "nozzle_efficiency": 0.91,
+          "chamber_pressure_pa": 2400000.0,
+          "combustion_temperature_k": 3450.0,
+          "performance_curve": [
+            {
+              "time_s": 0.0,
+              "thrust_n": 0.0,
+              "fuel_flow_kg_s": 0.0,
+              "oxidizer_flow_kg_s": 0.0,
+              "chamber_pressure_pa": 0.0,
+              "temperature_k": 293.15
+            },
+            {
+              "time_s": 0.35,
+              "thrust_n": 32835.0,
+              "fuel_flow_kg_s": 4.4,
+              "oxidizer_flow_kg_s": 11.0,
+              "chamber_pressure_pa": 2400000.0,
+              "temperature_k": 3450.0
+            },
+            {
+              "time_s": 7.65,
+              "thrust_n": 32835.0,
+              "fuel_flow_kg_s": 4.4,
+              "oxidizer_flow_kg_s": 11.0,
+              "chamber_pressure_pa": 2400000.0,
+              "temperature_k": 3450.0
+            },
+            {
+              "time_s": 8.0,
+              "thrust_n": 0.0,
+              "fuel_flow_kg_s": 0.0,
+              "oxidizer_flow_kg_s": 0.0,
+              "chamber_pressure_pa": 0.0,
+              "temperature_k": 293.15
+            }
+          ]
+        },
+        "aerodynamics": {
+          "fin_count": 4,
+          "fin_area_m2": 0.085,
+          "base_drag_coefficient": 0.4,
+          "center_of_pressure_m": 3.25,
+          "induced_drag_factor": 1.8,
+          "valid_mach_min": 0.0,
+          "valid_mach_max": 5.0,
+          "valid_angle_of_attack_deg": 20.0,
+          "coefficient_table": [
+            {"mach": 0.0, "drag_coefficient": 0.4, "normal_force_slope_per_rad": 3.45, "pitch_damping_coefficient": 0.08, "control_force_coefficient": 2.4},
+            {"mach": 0.5, "drag_coefficient": 0.42, "normal_force_slope_per_rad": 3.5, "pitch_damping_coefficient": 0.082, "control_force_coefficient": 2.38},
+            {"mach": 0.9, "drag_coefficient": 0.54, "normal_force_slope_per_rad": 3.65, "pitch_damping_coefficient": 0.09, "control_force_coefficient": 2.3},
+            {"mach": 1.05, "drag_coefficient": 0.62, "normal_force_slope_per_rad": 3.8, "pitch_damping_coefficient": 0.095, "control_force_coefficient": 2.2},
+            {"mach": 1.3, "drag_coefficient": 0.55, "normal_force_slope_per_rad": 3.7, "pitch_damping_coefficient": 0.092, "control_force_coefficient": 2.15},
+            {"mach": 2.0, "drag_coefficient": 0.48, "normal_force_slope_per_rad": 3.4, "pitch_damping_coefficient": 0.085, "control_force_coefficient": 2.0},
+            {"mach": 3.0, "drag_coefficient": 0.44, "normal_force_slope_per_rad": 3.1, "pitch_damping_coefficient": 0.08, "control_force_coefficient": 1.8},
+            {"mach": 5.0, "drag_coefficient": 0.42, "normal_force_slope_per_rad": 2.7, "pitch_damping_coefficient": 0.075, "control_force_coefficient": 1.55}
+          ]
+        },
+        "recovery": {
+          "drogue_area_m2": 1.8,
+          "main_area_m2": 18.0,
+          "main_deploy_altitude_m": 900.0,
+          "inflation_delay_s": 1.5,
+          "max_touchdown_speed_m_s": 8.0
+        }
+      },
+      {
+        "name": "Upper Stage",
+        "dry_mass_kg": 62.0,
+        "fuel_mass_kg": 20.0,
+        "oxidizer_mass_kg": 48.0,
+        "length_m": 4.1,
+        "diameter_m": 0.32,
+        "center_of_mass_m": 2.05,
+        "inertia_kg_m2": [2.4, 115.0, 115.0],
+        "mass_properties": [
+          {
+            "propellant_fraction": 0.0,
+            "center_of_mass_m": 1.84,
+            "inertia_kg_m2": [1.5, 65.0, 65.0]
+          },
+          {
+            "propellant_fraction": 0.5,
+            "center_of_mass_m": 1.95,
+            "inertia_kg_m2": [1.95, 90.0, 90.0]
+          },
+          {
+            "propellant_fraction": 1.0,
+            "center_of_mass_m": 2.05,
+            "inertia_kg_m2": [2.4, 115.0, 115.0]
+          }
+        ],
+        "engines": [
+          {
+            "id": "cendrawasih-upper-01",
+            "model": "Cendrawasih Upper-01",
+            "position_body_m": [0.0, 0.0, 0.0],
+            "direction_body": [1.0, 0.0, 0.0],
+            "performance_scale": 1.0,
+            "enabled": true,
+            "gimbal_enabled": true
+          }
+        ],
+        "propulsion": {
+          "burn_duration_s": 10.0,
+          "fuel_flow_kg_s": 1.9,
+          "oxidizer_flow_kg_s": 4.6,
+          "c_star_m_s": 1780.0,
+          "thrust_coefficient": 1.47,
+          "nozzle_efficiency": 0.92,
+          "chamber_pressure_pa": 2100000.0,
+          "combustion_temperature_k": 3420.0,
+          "performance_curve": [
+            {
+              "time_s": 0.0,
+              "thrust_n": 0.0,
+              "fuel_flow_kg_s": 0.0,
+              "oxidizer_flow_kg_s": 0.0,
+              "chamber_pressure_pa": 0.0,
+              "temperature_k": 293.15
+            },
+            {
+              "time_s": 0.35,
+              "thrust_n": 15647.0,
+              "fuel_flow_kg_s": 1.9,
+              "oxidizer_flow_kg_s": 4.6,
+              "chamber_pressure_pa": 2100000.0,
+              "temperature_k": 3420.0
+            },
+            {
+              "time_s": 9.65,
+              "thrust_n": 15647.0,
+              "fuel_flow_kg_s": 1.9,
+              "oxidizer_flow_kg_s": 4.6,
+              "chamber_pressure_pa": 2100000.0,
+              "temperature_k": 3420.0
+            },
+            {
+              "time_s": 10.0,
+              "thrust_n": 0.0,
+              "fuel_flow_kg_s": 0.0,
+              "oxidizer_flow_kg_s": 0.0,
+              "chamber_pressure_pa": 0.0,
+              "temperature_k": 293.15
+            }
+          ]
+        },
+        "aerodynamics": {
+          "fin_count": 4,
+          "fin_area_m2": 0.055,
+          "base_drag_coefficient": 0.36,
+          "center_of_pressure_m": 2.55,
+          "induced_drag_factor": 1.8,
+          "valid_mach_min": 0.0,
+          "valid_mach_max": 5.0,
+          "valid_angle_of_attack_deg": 20.0,
+          "coefficient_table": [
+            {"mach": 0.0, "drag_coefficient": 0.36, "normal_force_slope_per_rad": 3.35, "pitch_damping_coefficient": 0.08, "control_force_coefficient": 2.35},
+            {"mach": 0.5, "drag_coefficient": 0.38, "normal_force_slope_per_rad": 3.4, "pitch_damping_coefficient": 0.082, "control_force_coefficient": 2.32},
+            {"mach": 0.9, "drag_coefficient": 0.5, "normal_force_slope_per_rad": 3.55, "pitch_damping_coefficient": 0.09, "control_force_coefficient": 2.25},
+            {"mach": 1.05, "drag_coefficient": 0.58, "normal_force_slope_per_rad": 3.7, "pitch_damping_coefficient": 0.095, "control_force_coefficient": 2.15},
+            {"mach": 1.3, "drag_coefficient": 0.51, "normal_force_slope_per_rad": 3.6, "pitch_damping_coefficient": 0.092, "control_force_coefficient": 2.1},
+            {"mach": 2.0, "drag_coefficient": 0.44, "normal_force_slope_per_rad": 3.3, "pitch_damping_coefficient": 0.085, "control_force_coefficient": 1.95},
+            {"mach": 3.0, "drag_coefficient": 0.4, "normal_force_slope_per_rad": 3.0, "pitch_damping_coefficient": 0.08, "control_force_coefficient": 1.75},
+            {"mach": 5.0, "drag_coefficient": 0.38, "normal_force_slope_per_rad": 2.6, "pitch_damping_coefficient": 0.075, "control_force_coefficient": 1.5}
+          ]
+        },
+        "recovery": {
+          "drogue_area_m2": 1.2,
+          "main_area_m2": 13.0,
+          "main_deploy_altitude_m": 1200.0,
+          "inflation_delay_s": 1.5,
+          "max_touchdown_speed_m_s": 8.0
+        }
+      }
+    ]
+  },
+  "sensors": {
+    "imu_rate_hz": 200.0,
+    "barometer_rate_hz": 50.0,
+    "gnss_rate_hz": 10.0,
+    "accelerometer_noise_m_s2": 0.08,
+    "gyro_noise_rad_s": 0.0015,
+    "barometer_noise_m": 1.5,
+    "gnss_position_noise_m": 2.5,
+    "gnss_velocity_noise_m_s": 0.15
+  },
+  "actuators": {
+    "max_tvc_deg": 6.0,
+    "max_fin_deg": 14.0,
+    "max_rate_deg_s": 360.0,
+    "tvc_kp": 0.75,
+    "tvc_kd": 0.18
+  }
+}
