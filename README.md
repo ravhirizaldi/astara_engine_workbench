@@ -155,8 +155,8 @@ through separation.
 
 Current controller limitations remain explicit:
 
-- attitude estimation remains gyro integration without calibrated absolute
-  magnetometer correction;
+- attitude estimation remains Earth-rate-compensated gyro integration without
+  calibrated absolute magnetometer correction;
 - uncertainty is a bounded diagonal estimate, not a validated navigation filter;
 - the C ABI is loaded in-process with `ctypes`, without transport fault testing;
 - timing/memory budgets, cross-platform baselines, HIL evidence, and controller

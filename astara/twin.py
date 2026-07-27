@@ -882,6 +882,7 @@ def _derivative(
     )
     radius = max(float(np.linalg.norm(position)), EARTH_RADIUS_M)
     earth_rate = np.array([0.0, 0.0, EARTH_ROTATION_RAD_S])
+    earth_rate_body = quat_rotate(quat_conjugate(quaternion), earth_rate)
     gravity = -EARTH_MU * position / radius**3
     rotating_terms = -2.0 * cross3(earth_rate, velocity) - cross3(
         earth_rate, cross3(earth_rate, position)
@@ -892,7 +893,12 @@ def _derivative(
         moment_body - cross3(rates, inertia * rates)
     ) / inertia
     return np.concatenate(
-        (velocity, acceleration, quat_derivative(quaternion, rates), rates_dot)
+        (
+            velocity,
+            acceleration,
+            quat_derivative(quaternion, rates - earth_rate_body),
+            rates_dot,
+        )
     )
 
 
@@ -1176,14 +1182,21 @@ def run_simulation(
         environment["longitude_deg"],
         environment["launch_altitude_m"],
     )
+    launch_attitude = initial_attitude(
+        launch_position, environment["launch_azimuth_deg"]
+    )
+    launch_body_rate = quat_rotate(
+        quat_conjugate(launch_attitude),
+        np.array([0.0, 0.0, EARTH_ROTATION_RAD_S]),
+    )
     integrated_stack = Body(
         "integrated_stack",
         0,
         stages[0],
         launch_position.copy(),
         np.zeros(3),
-        initial_attitude(launch_position, environment["launch_azimuth_deg"]),
-        np.zeros(3),
+        launch_attitude,
+        launch_body_rate,
         float(stages[0]["fuel_mass_kg"]),
         float(stages[0]["oxidizer_mass_kg"]),
         _stage_total_mass(stages[1]),

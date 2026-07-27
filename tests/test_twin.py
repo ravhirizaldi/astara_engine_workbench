@@ -10,17 +10,66 @@ from unittest import mock
 import numpy as np
 
 from astara.flight_core import FswOutput
+from astara.math3d import (
+    EARTH_ROTATION_RAD_S,
+    geodetic_to_ecef,
+    initial_attitude,
+    quat_conjugate,
+    quat_rotate,
+)
 from astara.scenario import default_scenario, load_scenario, scenario_hash
 from astara.twin import (
     Body,
     _actuator_commands,
     _apply_sensor_faults,
+    _derivative,
     _sensor_frame,
     run_simulation,
 )
 
 
 class TwinTests(unittest.TestCase):
+    def test_body_to_ecef_attitude_removes_earth_rate(self) -> None:
+        scenario = default_scenario()
+        stage = scenario["vehicle"]["stages"][0]
+        position = geodetic_to_ecef(-6.2, 106.8, 50.0)
+        attitude = initial_attitude(position, 90.0)
+        earth_rate_body = quat_rotate(
+            quat_conjugate(attitude),
+            np.array([0.0, 0.0, EARTH_ROTATION_RAD_S]),
+        )
+        body = Body(
+            name="integrated_stack",
+            stage_index=0,
+            stage=stage,
+            position_ecef_m=position,
+            velocity_ecef_m_s=np.zeros(3),
+            attitude_wxyz=attitude,
+            body_rates_rad_s=earth_rate_body,
+            fuel_kg=stage["fuel_mass_kg"],
+            oxidizer_kg=stage["oxidizer_mass_kg"],
+        )
+        state = np.concatenate(
+            (
+                body.position_ecef_m,
+                body.velocity_ecef_m_s,
+                body.attitude_wxyz,
+                body.body_rates_rad_s,
+            )
+        )
+
+        derivative = _derivative(
+            body,
+            scenario,
+            state,
+            0.0,
+            np.zeros(2),
+            np.zeros(4),
+            0.0,
+        )
+
+        np.testing.assert_allclose(derivative[6:10], 0.0, atol=1e-15)
+
     def test_three_sensor_channels_are_independent_and_faults_hold(self) -> None:
         scenario = default_scenario()
         stage = scenario["vehicle"]["stages"][0]

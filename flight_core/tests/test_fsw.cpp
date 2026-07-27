@@ -18,6 +18,7 @@ void require(bool condition, const char* expression, int line) {
 #define REQUIRE(expression) require((expression), #expression, __LINE__)
 
 constexpr double kEarthRadiusM = 6'378'137.0;
+constexpr double kEarthRotationRadS = 7.292115e-5;
 constexpr double kRestSpecificForceM_S2 = 9.764;
 
 FswConfig default_config() {
@@ -289,6 +290,18 @@ void test_ecef_gravity_rotation_and_vertical_derivation() {
             - output.estimated_vertical_velocity_m_s
         ) < 1e-9
     );
+    fsw_destroy(handle);
+
+    handle = fsw_create(&config);
+    input = input_at(0.0);
+    step(handle, input, output);
+    for (int tick = 1; tick <= 100; ++tick) {
+        input = input_at(tick * 0.01);
+        input.sensors.imus[0].gyro_body_rad_s[2] =
+            kEarthRotationRadS;
+        step(handle, input, output);
+    }
+    REQUIRE(std::abs(output.estimated_attitude_wxyz[3]) < 1e-12);
     fsw_destroy(handle);
 
     handle = fsw_create(&config);

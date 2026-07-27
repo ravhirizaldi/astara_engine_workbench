@@ -1721,9 +1721,17 @@ void update_gyro_bias(
     const double alpha = 1.0 - std::exp(
         -dt_s / context.config.gyro_bias_time_constant_s
     );
+    const std::array<double, 3> earth_rate_ecef{
+        0.0, 0.0, kEarthRotationRadS
+    };
+    const auto earth_rate_body = rotate(
+        conjugate(context.attitude), earth_rate_ecef
+    );
     for (int axis = 0; axis < 3; ++axis) {
         context.gyro_bias[axis] += alpha * (
-            voted.gyro[axis] - context.gyro_bias[axis]
+            voted.gyro[axis]
+            - earth_rate_body[axis]
+            - context.gyro_bias[axis]
         );
     }
 }
@@ -2011,7 +2019,18 @@ void update_navigation(
                 voted.acceleration[axis]
                 - context.accelerometer_bias[axis];
         }
-        integrate_attitude(context, corrected_gyro, imu_delta_s);
+        const std::array<double, 3> earth_rate{
+            0.0, 0.0, kEarthRotationRadS
+        };
+        const auto earth_rate_body = rotate(
+            conjugate(context.attitude), earth_rate
+        );
+        std::array<double, 3> ecef_relative_gyro{};
+        for (int axis = 0; axis < 3; ++axis) {
+            ecef_relative_gyro[axis] =
+                corrected_gyro[axis] - earth_rate_body[axis];
+        }
+        integrate_attitude(context, ecef_relative_gyro, imu_delta_s);
         const auto specific_force_ecef = rotate(
             context.attitude, corrected_acceleration
         );
@@ -2025,9 +2044,6 @@ void update_navigation(
                 * context.position_ecef[axis]
                 / (radius * radius * radius);
         }
-        const std::array<double, 3> earth_rate{
-            0.0, 0.0, kEarthRotationRadS
-        };
         const auto coriolis = cross(earth_rate, context.velocity_ecef);
         const auto centrifugal = cross(
             earth_rate, cross(earth_rate, context.position_ecef)

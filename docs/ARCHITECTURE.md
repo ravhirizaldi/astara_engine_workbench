@@ -40,8 +40,11 @@ cannot poison the next channel baseline.
 Navigation is a minimal ECEF strapdown solution. The first accepted GNSS
 position establishes the radial altitude reference and the configured launch
 azimuth establishes the body-to-ECEF attitude. Voted body specific force is
-rotated into ECEF, then point-mass Earth gravity and rotating-Earth terms are
-applied before position and velocity integration. Gravity uses
+rotated into ECEF. Gyro measurements remain inertial body rates; Earth rate is
+rotated into body coordinates and removed only for body-to-ECEF attitude
+propagation, and an Earth-fixed launch stack starts with that inertial body
+rate. Point-mass Earth gravity and rotating-Earth terms are then applied before
+position and velocity integration. Gravity uses
 `mu = 3.986004418e14 m^3/s^2`, spherical radius `6378137 m`, and Earth rate
 `7.292115e-5 rad/s`, matching the Python twin. Altitude and vertical velocity
 are derived from ECEF radius and the local radial unit vector. GNSS vertical
