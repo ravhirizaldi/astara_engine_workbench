@@ -20,6 +20,9 @@ from .aero import AeroResult, atmosphere, estimate
 from .flight_core import (
     FSW_BODY_CORE,
     FSW_BODY_INTEGRATED,
+    FSW_DISCRETE_ACTION_DEPLOY_DROGUE,
+    FSW_DISCRETE_ACTION_DEPLOY_MAIN,
+    FSW_DISCRETE_ACTION_STAGE_SEPARATE,
     MODE_NAMES,
     NAVIGATION_STATUS_NAMES,
     SENSOR_CSV_FIELDS,
@@ -50,6 +53,42 @@ from .scenario import evidence_documents, model_source_hash, scenario_hash, vali
 
 
 @dataclass
+class SensorChannelState:
+    accelerometer_bias_m_s2: np.ndarray
+    gyro_bias_rad_s: np.ndarray
+    magnetometer_bias: np.ndarray
+    barometer_bias_m: float
+    gnss_position_bias_m: np.ndarray
+    gnss_velocity_bias_m_s: np.ndarray
+    acceleration_body_m_s2: np.ndarray = field(
+        default_factory=lambda: np.zeros(3)
+    )
+    gyro_body_rad_s: np.ndarray = field(
+        default_factory=lambda: np.zeros(3)
+    )
+    magnetic_body: np.ndarray = field(
+        default_factory=lambda: np.array([1.0, 0.0, 0.0])
+    )
+    barometric_altitude_m: float = 0.0
+    gnss_position_ecef_m: np.ndarray = field(
+        default_factory=lambda: np.zeros(3)
+    )
+    gnss_velocity_ecef_m_s: np.ndarray = field(
+        default_factory=lambda: np.zeros(3)
+    )
+    imu_sample_time_s: float = 0.0
+    magnetometer_sample_time_s: float = 0.0
+    barometer_sample_time_s: float = 0.0
+    gnss_sample_time_s: float = 0.0
+    next_imu_sample_s: float = 0.0
+    next_magnetometer_sample_s: float = 0.0
+    next_barometer_sample_s: float = 0.0
+    next_gnss_sample_s: float = 0.0
+    initialized: bool = False
+    fault_state: tuple[str, ...] = ()
+
+
+@dataclass
 class Body:
     name: str
     stage_index: int
@@ -75,14 +114,9 @@ class Body:
     last_mach: float = 0.0
     last_angle_of_attack_deg: float = 0.0
     aero_valid: bool = True
-    sampled_barometer_altitude_m: float | None = None
-    sampled_gnss_position_ecef_m: np.ndarray | None = None
-    sampled_gnss_velocity_ecef_m_s: np.ndarray | None = None
-    next_barometer_sample_s: float = 0.0
-    next_gnss_sample_s: float = 0.0
-    last_barometer_sample_s: float = 0.0
-    last_gnss_sample_s: float = 0.0
+    sensor_channels: list[SensorChannelState] = field(default_factory=list)
     next_fsw_sample_s: float = 0.0
+    last_discrete_actuation_sequence: int = 0
     last_tvc_rad: np.ndarray = field(default_factory=lambda: np.zeros(2))
     last_fin_rad: np.ndarray = field(default_factory=lambda: np.zeros(3))
     last_engine_thrusts_n: dict[str, float] = field(default_factory=dict)
@@ -201,6 +235,99 @@ def _fault_active(
     return None
 
 
+def _sensor_faults(
+    scenario: dict[str, Any],
+    body: str,
+    sensor: str,
+    time_s: float,
+    channel: int,
+) -> list[dict[str, Any]]:
+    return [
+        fault
+        for fault in scenario.get("faults", [])
+        if (
+            fault.get("body", "all") in ("all", body)
+            and fault.get("component", fault.get("sensor")) == sensor
+            and (
+                "channel" not in fault
+                or int(fault["channel"]) == channel
+            )
+            and float(fault.get("start_s", 0.0)) <= time_s
+            <= float(fault.get("start_s", 0.0))
+                + float(fault.get("duration_s", math.inf))
+        )
+    ]
+
+
+def _channel_state(
+    body: Body,
+    sensors: dict[str, Any],
+    rng: np.random.Generator,
+    channel: int,
+) -> SensorChannelState:
+    while len(body.sensor_channels) <= channel:
+        body.sensor_channels.append(
+            SensorChannelState(
+                rng.normal(
+                    0.0,
+                    float(sensors["accelerometer_noise_m_s2"]) * 0.1,
+                    3,
+                ),
+                rng.normal(
+                    0.0,
+                    float(sensors["gyro_noise_rad_s"]) * 0.1,
+                    3,
+                ),
+                rng.normal(0.0, 0.002, 3),
+                float(
+                    rng.normal(
+                        0.0,
+                        float(sensors["barometer_noise_m"]) * 0.1,
+                    )
+                ),
+                rng.normal(
+                    0.0,
+                    float(sensors["gnss_position_noise_m"]) * 0.1,
+                    3,
+                ),
+                rng.normal(
+                    0.0,
+                    float(sensors["gnss_velocity_noise_m_s"]) * 0.1,
+                    3,
+                ),
+            )
+        )
+    return body.sensor_channels[channel]
+
+
+def _apply_sensor_faults(
+    value: np.ndarray,
+    previous: np.ndarray,
+    sample_time_s: float,
+    previous_time_s: float,
+    faults: list[dict[str, Any]],
+) -> tuple[np.ndarray, float, int]:
+    result = value.copy()
+    timestamp = sample_time_s
+    valid = 1
+    kinds = {str(fault.get("type")) for fault in faults}
+    if "dropout" in kinds:
+        result, timestamp, valid = previous.copy(), previous_time_s, 0
+    elif "stale" in kinds:
+        result, timestamp = previous.copy(), previous_time_s
+    elif "freeze" in kinds:
+        result = previous.copy()
+    for fault in faults:
+        if fault.get("type") == "scale_error":
+            result *= float(fault.get("value", 1.0))
+    for fault in faults:
+        if fault.get("type") == "bias":
+            result += float(fault.get("value", 0.0))
+    if "stuck-valid" in kinds:
+        valid = 1
+    return result, timestamp, valid
+
+
 def _engine_fault_active(
     scenario: dict[str, Any], body: str, engine_id: str, time_s: float
 ) -> dict[str, Any] | None:
@@ -230,73 +357,161 @@ def _sensor_frame(
     channel: int = 0,
 ) -> SensorFrame:
     sensors = scenario["sensors"]
+    state = _channel_state(body, sensors, rng, channel)
     altitude = float(np.linalg.norm(body.position_ecef_m) - np.linalg.norm(launch_position))
     up = unit(body.position_ecef_m)
-    acceleration = (
-        body.last_specific_force_body_m_s2
-        + rng.normal(0.0, sensors["accelerometer_noise_m_s2"], 3)
-    )
-    gyro = (
-        body.body_rates_rad_s
-        + rng.normal(0.0, sensors["gyro_noise_rad_s"], 3)
-    )
     magnetic_ecef = unit(np.array([0.28, 0.08, -0.52]))
-    magnetic_body = quat_rotate(quat_conjugate(body.attitude_wxyz), magnetic_ecef)
+    previous_acceleration = state.acceleration_body_m_s2.copy()
+    previous_gyro = state.gyro_body_rad_s.copy()
+    previous_magnetic = state.magnetic_body.copy()
+    previous_barometer = np.array([state.barometric_altitude_m])
+    previous_gnss = np.concatenate(
+        (state.gnss_position_ecef_m, state.gnss_velocity_ecef_m_s)
+    )
+    previous_imu_time = state.imu_sample_time_s
+    previous_magnetometer_time = state.magnetometer_sample_time_s
+    previous_barometer_time = state.barometer_sample_time_s
+    previous_gnss_time = state.gnss_sample_time_s
+    if not state.initialized or time_s + 1e-12 >= state.next_imu_sample_s:
+        state.acceleration_body_m_s2 = (
+            body.last_specific_force_body_m_s2
+            + state.accelerometer_bias_m_s2
+            + rng.normal(
+                0.0, sensors["accelerometer_noise_m_s2"], 3
+            )
+        )
+        state.gyro_body_rad_s = (
+            body.body_rates_rad_s
+            + state.gyro_bias_rad_s
+            + rng.normal(0.0, sensors["gyro_noise_rad_s"], 3)
+        )
+        state.imu_sample_time_s = time_s
+        state.next_imu_sample_s = (
+            time_s + 1.0 / float(sensors["imu_rate_hz"])
+        )
     if (
-        body.sampled_barometer_altitude_m is None
-        or time_s + 1e-12 >= body.next_barometer_sample_s
+        not state.initialized
+        or time_s + 1e-12 >= state.next_magnetometer_sample_s
     ):
-        body.sampled_barometer_altitude_m = altitude + rng.normal(
-            0.0, sensors["barometer_noise_m"]
+        state.magnetic_body = (
+            quat_rotate(
+                quat_conjugate(body.attitude_wxyz), magnetic_ecef
+            )
+            + state.magnetometer_bias
+            + rng.normal(0.0, 0.002, 3)
         )
-        body.last_barometer_sample_s = time_s
-        body.next_barometer_sample_s = time_s + 1.0 / sensors["barometer_rate_hz"]
+        state.magnetometer_sample_time_s = time_s
+        state.next_magnetometer_sample_s = (
+            time_s + 1.0 / float(sensors["imu_rate_hz"])
+        )
     if (
-        body.sampled_gnss_position_ecef_m is None
-        or time_s + 1e-12 >= body.next_gnss_sample_s
+        not state.initialized
+        or time_s + 1e-12 >= state.next_barometer_sample_s
     ):
-        body.sampled_gnss_position_ecef_m = body.position_ecef_m + rng.normal(
-            0.0, sensors["gnss_position_noise_m"], 3
+        state.barometric_altitude_m = float(
+            altitude
+            + state.barometer_bias_m
+            + rng.normal(0.0, sensors["barometer_noise_m"])
         )
-        body.sampled_gnss_velocity_ecef_m_s = body.velocity_ecef_m_s + rng.normal(
-            0.0, sensors["gnss_velocity_noise_m_s"], 3
+        state.barometer_sample_time_s = time_s
+        state.next_barometer_sample_s = (
+            time_s + 1.0 / float(sensors["barometer_rate_hz"])
         )
-        body.last_gnss_sample_s = time_s
-        body.next_gnss_sample_s = time_s + 1.0 / sensors["gnss_rate_hz"]
-    barometer_altitude = float(body.sampled_barometer_altitude_m)
-    gnss_position = body.sampled_gnss_position_ecef_m.copy()
-    gnss_velocity = body.sampled_gnss_velocity_ecef_m_s.copy()
-    barometer_valid = 1
-    gnss_valid = 1
-    for name in ("barometer", "gnss", "imu"):
-        fault = _fault_active(
-            scenario, body.name, name, time_s, channel
+    if (
+        not state.initialized
+        or time_s + 1e-12 >= state.next_gnss_sample_s
+    ):
+        state.gnss_position_ecef_m = (
+            body.position_ecef_m
+            + state.gnss_position_bias_m
+            + rng.normal(0.0, sensors["gnss_position_noise_m"], 3)
         )
-        if not fault:
-            continue
-        kind = fault.get("type")
-        if name == "barometer" and kind in ("dropout", "freeze"):
-            barometer_valid = 0
-        elif name == "barometer" and kind == "bias":
-            barometer_altitude += float(fault.get("value", 0.0))
-        elif name == "gnss" and kind in ("dropout", "freeze"):
-            gnss_valid = 0
-        elif name == "gnss" and kind == "bias":
-            gnss_position += float(fault.get("value", 0.0))
-        elif name == "imu" and kind == "bias":
-            gyro += float(fault.get("value", 0.0))
+        state.gnss_velocity_ecef_m_s = (
+            body.velocity_ecef_m_s
+            + state.gnss_velocity_bias_m_s
+            + rng.normal(0.0, sensors["gnss_velocity_noise_m_s"], 3)
+        )
+        state.gnss_sample_time_s = time_s
+        state.next_gnss_sample_s = (
+            time_s + 1.0 / float(sensors["gnss_rate_hz"])
+        )
+    imu_faults = _sensor_faults(
+        scenario, body.name, "imu", time_s, channel
+    )
+    magnetometer_faults = _sensor_faults(
+        scenario, body.name, "magnetometer", time_s, channel
+    )
+    barometer_faults = _sensor_faults(
+        scenario, body.name, "barometer", time_s, channel
+    )
+    gnss_faults = _sensor_faults(
+        scenario, body.name, "gnss", time_s, channel
+    )
+    acceleration, imu_time, accel_valid = _apply_sensor_faults(
+        state.acceleration_body_m_s2,
+        previous_acceleration,
+        state.imu_sample_time_s,
+        previous_imu_time,
+        imu_faults,
+    )
+    gyro, imu_time, gyro_valid = _apply_sensor_faults(
+        state.gyro_body_rad_s,
+        previous_gyro,
+        imu_time,
+        previous_imu_time,
+        imu_faults,
+    )
+    magnetic_body, magnetometer_time, magnetometer_valid = (
+        _apply_sensor_faults(
+            state.magnetic_body,
+            previous_magnetic,
+            state.magnetometer_sample_time_s,
+            previous_magnetometer_time,
+            magnetometer_faults,
+        )
+    )
+    barometer_value, barometer_time, barometer_valid = (
+        _apply_sensor_faults(
+            np.array([state.barometric_altitude_m]),
+            previous_barometer,
+            state.barometer_sample_time_s,
+            previous_barometer_time,
+            barometer_faults,
+        )
+    )
+    gnss_value, gnss_time, gnss_valid = _apply_sensor_faults(
+        np.concatenate(
+            (state.gnss_position_ecef_m, state.gnss_velocity_ecef_m_s)
+        ),
+        previous_gnss,
+        state.gnss_sample_time_s,
+        previous_gnss_time,
+        gnss_faults,
+    )
+    state.acceleration_body_m_s2 = acceleration.copy()
+    state.gyro_body_rad_s = gyro.copy()
+    state.magnetic_body = magnetic_body.copy()
+    state.barometric_altitude_m = float(barometer_value[0])
+    state.gnss_position_ecef_m = gnss_value[:3].copy()
+    state.gnss_velocity_ecef_m_s = gnss_value[3:].copy()
+    state.imu_sample_time_s = imu_time
+    state.magnetometer_sample_time_s = magnetometer_time
+    state.barometer_sample_time_s = barometer_time
+    state.gnss_sample_time_s = gnss_time
+    state.fault_state = tuple(
+        str(fault.get("type"))
+        for fault in (
+            imu_faults
+            + magnetometer_faults
+            + barometer_faults
+            + gnss_faults
+        )
+    )
+    state.initialized = True
+    barometer_altitude = float(barometer_value[0])
+    gnss_position = gnss_value[:3]
+    gnss_velocity = gnss_value[3:]
     vertical_velocity = float(np.dot(gnss_velocity, up))
-    if channel > 0:
-        barometer_altitude += float(
-            rng.normal(0.0, sensors["barometer_noise_m"])
-        )
-        gnss_position += rng.normal(
-            0.0, sensors["gnss_position_noise_m"], 3
-        )
-        gnss_velocity += rng.normal(
-            0.0, sensors["gnss_velocity_noise_m_s"], 3
-        )
-        vertical_velocity = float(np.dot(gnss_velocity, up))
     dynamic_pressure = max(
         0.0,
         body.last_dynamic_pressure_pa
@@ -331,12 +546,17 @@ def _sensor_frame(
         gnss_valid,
         barometer_valid,
         int(separated),
-        body.last_barometer_sample_s,
-        body.last_gnss_sample_s,
+        barometer_time,
+        gnss_time,
         int(engine_health > 0.0),
         int(propulsion_running),
         int(body.drogue_deployed),
         int(body.main_deployed),
+        imu_time,
+        magnetometer_time,
+        accel_valid,
+        gyro_valid,
+        magnetometer_valid,
     )
 
 
@@ -383,6 +603,8 @@ def _run_fsw_substeps(
             propulsion_running=propulsion_running,
             drogue_deployed=body.drogue_deployed,
             main_deployed=body.main_deployed,
+            previous_execution_time_s=0.0,
+            deadline_missed=False,
             sensor_channels=frames[1:],
         )
         if on_sensor:
@@ -768,6 +990,22 @@ def _split_stack(
     return core_stage, upper_stage
 
 
+def _consume_discrete_actuation(
+    body: Body,
+    output: FswOutput,
+    action: int,
+) -> bool:
+    command = output.discrete_actuation
+    if (
+        not command.valid
+        or int(command.action) != action
+        or int(command.sequence) <= body.last_discrete_actuation_sequence
+    ):
+        return False
+    body.last_discrete_actuation_sequence = int(command.sequence)
+    return True
+
+
 def _telemetry_row(
     time_s: float,
     body: Body,
@@ -1083,7 +1321,14 @@ def run_simulation(
                         )
                     previous_modes[body.name] = output.mode
 
-            if not separated and outputs["integrated_stack"].stage_separate:
+            if (
+                not separated
+                and _consume_discrete_actuation(
+                    integrated_stack,
+                    outputs["integrated_stack"],
+                    FSW_DISCRETE_ACTION_STAGE_SEPARATE,
+                )
+            ):
                 core_stage, upper_stage = _split_stack(integrated_stack, scenario)
                 integrated_core = cores.pop("integrated_stack")
                 integrated_output = outputs.pop("integrated_stack")
@@ -1136,7 +1381,17 @@ def run_simulation(
                     )
                     and fault.get("type") == "failed"
                 )
-                if output.deploy_drogue and not body.drogue_deployed and not drogue_failed:
+                deploy_drogue = _consume_discrete_actuation(
+                    body,
+                    output,
+                    FSW_DISCRETE_ACTION_DEPLOY_DROGUE,
+                )
+                deploy_main = _consume_discrete_actuation(
+                    body,
+                    output,
+                    FSW_DISCRETE_ACTION_DEPLOY_MAIN,
+                )
+                if deploy_drogue and not body.drogue_deployed and not drogue_failed:
                     body.drogue_deployed = True
                     body.parachute_deployed_s = time_s
                     events.append(
@@ -1147,7 +1402,7 @@ def run_simulation(
                             "detail": "",
                         }
                     )
-                if output.deploy_main and not body.main_deployed and not main_failed:
+                if deploy_main and not body.main_deployed and not main_failed:
                     body.main_deployed = True
                     body.parachute_deployed_s = time_s
                     events.append(
@@ -1206,6 +1461,24 @@ def run_simulation(
                         "mode": MODE_NAMES[output.mode],
                         "estimated_altitude_m": output.estimated_altitude_m,
                         "estimated_vertical_velocity_m_s": output.estimated_vertical_velocity_m_s,
+                        "estimated_position_ecef_x_m": (
+                            output.estimated_position_ecef_m[0]
+                        ),
+                        "estimated_position_ecef_y_m": (
+                            output.estimated_position_ecef_m[1]
+                        ),
+                        "estimated_position_ecef_z_m": (
+                            output.estimated_position_ecef_m[2]
+                        ),
+                        "estimated_velocity_ecef_x_m_s": (
+                            output.estimated_velocity_ecef_m_s[0]
+                        ),
+                        "estimated_velocity_ecef_y_m_s": (
+                            output.estimated_velocity_ecef_m_s[1]
+                        ),
+                        "estimated_velocity_ecef_z_m_s": (
+                            output.estimated_velocity_ecef_m_s[2]
+                        ),
                         "estimated_attitude_w": output.estimated_attitude_wxyz[0],
                         "estimated_attitude_x": output.estimated_attitude_wxyz[1],
                         "estimated_attitude_y": output.estimated_attitude_wxyz[2],
@@ -1249,6 +1522,12 @@ def run_simulation(
                         "inhibit_flags": int(output.inhibit_flags),
                         "consecutive_overruns": int(
                             output.consecutive_overruns
+                        ),
+                        "discrete_actuation_sequence": int(
+                            output.discrete_actuation.sequence
+                        ),
+                        "discrete_actuation_action": int(
+                            output.discrete_actuation.action
                         ),
                     }
                     summary_statistics["telemetry_samples"] += 1

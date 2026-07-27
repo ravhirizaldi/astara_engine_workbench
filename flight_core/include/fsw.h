@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#define FSW_ABI_VERSION 0x00040000u
+#define FSW_ABI_VERSION 0x00050000u
 #define FSW_MAX_GUIDANCE_POINTS 32
 #define FSW_MAX_SENSOR_CHANNELS 3
 #define FSW_FAULT_COUNT 21
@@ -116,7 +116,8 @@ enum FswDisagreementFlag {
 enum FswSensorStatusFlag {
     FSW_SENSOR_STATUS_IMU_SINGLE_SOURCE = 1u << 0,
     FSW_SENSOR_STATUS_BAROMETER_SINGLE_SOURCE = 1u << 1,
-    FSW_SENSOR_STATUS_GNSS_SINGLE_SOURCE = 1u << 2
+    FSW_SENSOR_STATUS_GNSS_SINGLE_SOURCE = 1u << 2,
+    FSW_SENSOR_STATUS_MAGNETOMETER_SINGLE_SOURCE = 1u << 3
 };
 
 enum FswSensorHealthFlag {
@@ -141,7 +142,15 @@ enum FswInhibitFlag {
 enum FswEventFlag {
     FSW_EVENT_STATE_CHANGED = 1u << 0,
     FSW_EVENT_FAULT_CHANGED = 1u << 1,
-    FSW_EVENT_COMMAND_PROCESSED = 1u << 2
+    FSW_EVENT_COMMAND_PROCESSED = 1u << 2,
+    FSW_EVENT_DISCRETE_ACTUATION = 1u << 3
+};
+
+enum FswDiscreteActuationAction {
+    FSW_DISCRETE_ACTION_NONE = 0,
+    FSW_DISCRETE_ACTION_STAGE_SEPARATE = 1,
+    FSW_DISCRETE_ACTION_DEPLOY_DROGUE = 2,
+    FSW_DISCRETE_ACTION_DEPLOY_MAIN = 3
 };
 
 typedef struct {
@@ -165,6 +174,10 @@ typedef struct {
     double imu_timeout_s;
     double barometer_timeout_s;
     double gnss_timeout_s;
+    double air_data_timeout_s;
+    double propulsion_status_timeout_s;
+    double discrete_feedback_timeout_s;
+    double platform_status_timeout_s;
     double acceleration_disagreement_m_s2;
     double gyro_disagreement_rad_s;
     double magnetic_disagreement;
@@ -188,6 +201,7 @@ typedef struct {
     double fault_recovery_persistence_s;
     double min_step_s;
     double max_step_s;
+    double step_time_tolerance_s;
     double loop_deadline_s;
     uint32_t overrun_abort_count;
     double propulsion_abort_health_percent;
@@ -211,6 +225,7 @@ typedef struct {
     double max_altitude_sigma_m;
     double max_velocity_sigma_m_s;
     double max_attitude_sigma_rad;
+    double launch_azimuth_rad;
     uint32_t guidance_count;
     FswGuidancePoint guidance[FSW_MAX_GUIDANCE_POINTS];
     int32_t body_role;
@@ -219,10 +234,16 @@ typedef struct {
 typedef struct {
     double acceleration_body_m_s2[3];
     double gyro_body_rad_s[3];
+    double sample_time_s;
+    int32_t accel_valid;
+    int32_t gyro_valid;
+} FswImuSample;
+
+typedef struct {
     double magnetic_body[3];
     double sample_time_s;
     int32_t valid;
-} FswImuSample;
+} FswMagnetometerSample;
 
 typedef struct {
     double altitude_m;
@@ -233,7 +254,6 @@ typedef struct {
 typedef struct {
     double gnss_position_ecef_m[3];
     double gnss_velocity_ecef_m_s[3];
-    double vertical_velocity_m_s;
     double sample_time_s;
     int32_t valid;
 } FswGnssSample;
@@ -242,9 +262,11 @@ typedef struct {
     double time_s;
     double dt_s;
     uint32_t imu_count;
+    uint32_t magnetometer_count;
     uint32_t barometer_count;
     uint32_t gnss_count;
     FswImuSample imus[FSW_MAX_SENSOR_CHANNELS];
+    FswMagnetometerSample magnetometers[FSW_MAX_SENSOR_CHANNELS];
     FswBarometerSample barometers[FSW_MAX_SENSOR_CHANNELS];
     FswGnssSample gnss[FSW_MAX_SENSOR_CHANNELS];
 } FswSensorSuite;
@@ -290,6 +312,13 @@ typedef struct {
 } FswCommand;
 
 typedef struct {
+    uint64_t sequence;
+    int32_t action;
+    double pulse_duration_s;
+    int32_t valid;
+} FswDiscreteActuationCommand;
+
+typedef struct {
     uint32_t abi_version;
     uint32_t struct_size;
     FswSensorSuite sensors;
@@ -319,22 +348,29 @@ typedef struct {
     int32_t command_result;
     uint32_t inhibit_flags;
     uint32_t event_flags;
+    FswDiscreteActuationCommand discrete_actuation;
     uint32_t imu_usable_mask;
+    uint32_t magnetometer_usable_mask;
     uint32_t barometer_usable_mask;
     uint32_t gnss_usable_mask;
     uint32_t imu_rejected_mask;
+    uint32_t magnetometer_rejected_mask;
     uint32_t barometer_rejected_mask;
     uint32_t gnss_rejected_mask;
     uint32_t disagreement_flags;
     uint32_t sensor_status_flags;
     uint32_t imu_health_flags[FSW_MAX_SENSOR_CHANNELS];
+    uint32_t magnetometer_health_flags[FSW_MAX_SENSOR_CHANNELS];
     uint32_t barometer_health_flags[FSW_MAX_SENSOR_CHANNELS];
     uint32_t gnss_health_flags[FSW_MAX_SENSOR_CHANNELS];
     double imu_age_s[FSW_MAX_SENSOR_CHANNELS];
+    double magnetometer_age_s[FSW_MAX_SENSOR_CHANNELS];
     double barometer_age_s[FSW_MAX_SENSOR_CHANNELS];
     double gnss_age_s[FSW_MAX_SENSOR_CHANNELS];
     double estimated_altitude_m;
     double estimated_vertical_velocity_m_s;
+    double estimated_position_ecef_m[3];
+    double estimated_velocity_ecef_m_s[3];
     double estimated_attitude_wxyz[4];
     double altitude_sigma_m;
     double vertical_velocity_sigma_m_s;

@@ -31,6 +31,14 @@ REPLAY_FIELDS = (
     "abort",
     "estimated_altitude_m",
     "estimated_vertical_velocity_m_s",
+    "estimated_position_ecef_x_m",
+    "estimated_position_ecef_y_m",
+    "estimated_position_ecef_z_m",
+    "estimated_velocity_ecef_x_m_s",
+    "estimated_velocity_ecef_y_m_s",
+    "estimated_velocity_ecef_z_m_s",
+    "discrete_actuation_sequence",
+    "discrete_actuation_action",
     "tvc_pitch_rad",
     "tvc_yaw_rad",
     "fin_roll_rad",
@@ -137,6 +145,8 @@ def replay_fsw(
                         else None
                     ),
                     sensor_channels=frames[1:],
+                    previous_execution_time_s=0.0,
+                    deadline_missed=False,
                 )
                 writer.writerow(
                     {
@@ -154,6 +164,30 @@ def replay_fsw(
                         "estimated_altitude_m": result.estimated_altitude_m,
                         "estimated_vertical_velocity_m_s": (
                             result.estimated_vertical_velocity_m_s
+                        ),
+                        "estimated_position_ecef_x_m": (
+                            result.estimated_position_ecef_m[0]
+                        ),
+                        "estimated_position_ecef_y_m": (
+                            result.estimated_position_ecef_m[1]
+                        ),
+                        "estimated_position_ecef_z_m": (
+                            result.estimated_position_ecef_m[2]
+                        ),
+                        "estimated_velocity_ecef_x_m_s": (
+                            result.estimated_velocity_ecef_m_s[0]
+                        ),
+                        "estimated_velocity_ecef_y_m_s": (
+                            result.estimated_velocity_ecef_m_s[1]
+                        ),
+                        "estimated_velocity_ecef_z_m_s": (
+                            result.estimated_velocity_ecef_m_s[2]
+                        ),
+                        "discrete_actuation_sequence": (
+                            result.discrete_actuation.sequence
+                        ),
+                        "discrete_actuation_action": (
+                            result.discrete_actuation.action
                         ),
                         "tvc_pitch_rad": result.tvc_pitch_rad,
                         "tvc_yaw_rad": result.tvc_yaw_rad,

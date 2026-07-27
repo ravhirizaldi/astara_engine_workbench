@@ -9,6 +9,9 @@ namespace {
 
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kEpsilon = 1e-12;
+constexpr double kEarthMuM3S2 = 3.986004418e14;
+constexpr double kEarthRadiusM = 6'378'137.0;
+constexpr double kEarthRotationRadS = 7.292115e-5;
 
 double clamp(double value, double low, double high) {
     return std::max(low, std::min(value, high));
@@ -38,6 +41,18 @@ double vector_norm(const double* values, int size) {
         squared += values[index] * values[index];
     }
     return std::sqrt(squared);
+}
+
+double radial_velocity(const double* position, const double* velocity) {
+    const double radius = vector_norm(position, 3);
+    if (radius <= kEpsilon) {
+        return 0.0;
+    }
+    return (
+        position[0] * velocity[0]
+        + position[1] * velocity[1]
+        + position[2] * velocity[2]
+    ) / radius;
 }
 
 double median3(double first, double second, double third) {
@@ -79,6 +94,10 @@ bool valid_config(const FswConfig& config) {
         config.imu_timeout_s,
         config.barometer_timeout_s,
         config.gnss_timeout_s,
+        config.air_data_timeout_s,
+        config.propulsion_status_timeout_s,
+        config.discrete_feedback_timeout_s,
+        config.platform_status_timeout_s,
         config.acceleration_disagreement_m_s2,
         config.gyro_disagreement_rad_s,
         config.barometer_disagreement_m,
@@ -100,6 +119,7 @@ bool valid_config(const FswConfig& config) {
         config.fault_recovery_persistence_s,
         config.min_step_s,
         config.max_step_s,
+        config.step_time_tolerance_s,
         config.loop_deadline_s,
         config.propulsion_abort_health_percent,
         config.propulsion_abort_persistence_s,
@@ -122,6 +142,7 @@ bool valid_config(const FswConfig& config) {
         config.max_altitude_sigma_m,
         config.max_velocity_sigma_m_s,
         config.max_attitude_sigma_rad,
+        config.launch_azimuth_rad,
     };
     if (
         config.abi_version != FSW_ABI_VERSION
@@ -142,6 +163,10 @@ bool valid_config(const FswConfig& config) {
         || config.imu_timeout_s <= 0.0
         || config.barometer_timeout_s <= 0.0
         || config.gnss_timeout_s <= 0.0
+        || config.air_data_timeout_s <= 0.0
+        || config.propulsion_status_timeout_s <= 0.0
+        || config.discrete_feedback_timeout_s <= 0.0
+        || config.platform_status_timeout_s <= 0.0
         || config.acceleration_disagreement_m_s2 <= 0.0
         || config.gyro_disagreement_rad_s <= 0.0
         || config.barometer_disagreement_m <= 0.0
@@ -165,6 +190,7 @@ bool valid_config(const FswConfig& config) {
         || config.fault_recovery_persistence_s <= 0.0
         || config.min_step_s <= 0.0
         || config.max_step_s < config.min_step_s
+        || config.step_time_tolerance_s < 0.0
         || config.loop_deadline_s <= 0.0
         || config.overrun_abort_count == 0
         || config.propulsion_abort_health_percent < 0.0
@@ -233,6 +259,7 @@ bool valid_input(const FswInput& input, const FswConfig& config) {
         || sensor.dt_s < config.min_step_s
         || sensor.dt_s > config.max_step_s
         || sensor.imu_count > FSW_MAX_SENSOR_CHANNELS
+        || sensor.magnetometer_count > FSW_MAX_SENSOR_CHANNELS
         || sensor.barometer_count > FSW_MAX_SENSOR_CHANNELS
         || sensor.gnss_count > FSW_MAX_SENSOR_CHANNELS
     ) {
@@ -241,11 +268,28 @@ bool valid_input(const FswInput& input, const FswConfig& config) {
     for (uint32_t index = 0; index < sensor.imu_count; ++index) {
         const auto& sample = sensor.imus[index];
         if (
+            (sample.accel_valid || sample.gyro_valid)
+            && (
+                (sample.accel_valid
+                    && !finite_vector(sample.acceleration_body_m_s2, 3))
+                || (sample.gyro_valid
+                    && !finite_vector(sample.gyro_body_rad_s, 3))
+                || !valid_timestamp(sample.sample_time_s, sensor.time_s)
+            )
+        ) {
+            return false;
+        }
+    }
+    for (
+        uint32_t index = 0;
+        index < sensor.magnetometer_count;
+        ++index
+    ) {
+        const auto& sample = sensor.magnetometers[index];
+        if (
             sample.valid
             && (
-                !finite_vector(sample.acceleration_body_m_s2, 3)
-                || !finite_vector(sample.gyro_body_rad_s, 3)
-                || !finite_vector(sample.magnetic_body, 3)
+                !finite_vector(sample.magnetic_body, 3)
                 || !valid_timestamp(sample.sample_time_s, sensor.time_s)
             )
         ) {
@@ -271,7 +315,6 @@ bool valid_input(const FswInput& input, const FswConfig& config) {
             && (
                 !finite_vector(sample.gnss_position_ecef_m, 3)
                 || !finite_vector(sample.gnss_velocity_ecef_m_s, 3)
-                || !std::isfinite(sample.vertical_velocity_m_s)
                 || !valid_timestamp(sample.sample_time_s, sensor.time_s)
             )
         ) {
@@ -351,14 +394,17 @@ struct ChannelHealth {
     uint32_t good_samples{};
     bool rejected{};
     double last_evaluated_sample_time_s{-1.0};
-    double last_value_time_s{-1.0};
-    std::array<double, 3> last_values{};
+    double last_seen_time_s{-1.0};
+    double last_accepted_time_s{-1.0};
+    std::array<double, 3> last_seen_values{};
+    std::array<double, 3> last_accepted_values{};
     uint32_t flags{};
     double age_s{};
 };
 
 struct VotedSensors {
     bool imu_valid{};
+    bool magnetometer_valid{};
     bool barometer_valid{};
     bool gnss_valid{};
     std::array<double, 3> acceleration{};
@@ -369,9 +415,11 @@ struct VotedSensors {
     double barometric_altitude{};
     double vertical_velocity{};
     double imu_sample_time_s{-1.0};
+    double magnetometer_sample_time_s{-1.0};
     double barometer_sample_time_s{-1.0};
     double gnss_sample_time_s{-1.0};
     uint32_t imu_usable_mask{};
+    uint32_t magnetometer_usable_mask{};
     uint32_t barometer_usable_mask{};
     uint32_t gnss_usable_mask{};
     uint32_t disagreement_flags{};
@@ -393,10 +441,15 @@ struct Context {
             );
         altitude = 0.0;
         vertical_velocity = 0.0;
+        position_ecef = {};
+        velocity_ecef = {};
         attitude = {1.0, 0.0, 0.0, 0.0};
+        launch_reference_attitude = {1.0, 0.0, 0.0, 0.0};
         last_gyro = {0.0, 0.0, 0.0};
         gyro_bias = {0.0, 0.0, 0.0};
+        accelerometer_bias = {0.0, 0.0, 0.0};
         imu_health = {};
+        magnetometer_health = {};
         barometer_health = {};
         gnss_health = {};
         apogee_seen = false;
@@ -411,18 +464,24 @@ struct Context {
         disagreement_flags = 0;
         sensor_status_flags = 0;
         imu_usable_mask = 0;
+        magnetometer_usable_mask = 0;
         barometer_usable_mask = 0;
         gnss_usable_mask = 0;
         imu_rejected_mask = 0;
+        magnetometer_rejected_mask = 0;
         barometer_rejected_mask = 0;
         gnss_rejected_mask = 0;
         attitude_valid = false;
+        attitude_initialized = false;
         navigation_status = FSW_NAV_INERTIAL;
         navigation_initialized = false;
         gnss_altitude_reference_initialized = false;
         gnss_radius_reference_m = 0.0;
         time_initialized = false;
         last_time_s = 0.0;
+        step_delta_s = 0.0;
+        input_timing_mismatch = false;
+        last_integrated_imu_sample_time_s = -1.0;
         last_barometer_sample_time_s = -1.0;
         last_gnss_sample_time_s = -1.0;
         launch_evidence_s = 0.0;
@@ -432,11 +491,17 @@ struct Context {
         imu_loss_evidence_s = 0.0;
         propulsion_loss_evidence_s = 0.0;
         fault_healthy_time_s = {};
-        ignition_started_s = -1.0;
-        separation_started_s = -1.0;
-        stage2_ignition_started_s = -1.0;
+        launch_commanded_s = -1.0;
+        ignition_confirmed_s = -1.0;
+        burnout_detected_s = -1.0;
+        separation_commanded_s = -1.0;
+        separation_confirmed_s = -1.0;
+        stage2_ignition_commanded_s = -1.0;
+        stage2_ignition_confirmed_s = -1.0;
         drogue_commanded_s = -1.0;
         main_commanded_s = -1.0;
+        next_discrete_actuation_sequence = 1;
+        discrete_actuation = {};
         last_command_sequence = 0;
         command_sequence = 0;
         command_type = FSW_COMMAND_NONE;
@@ -469,10 +534,16 @@ struct Context {
     int32_t mode{};
     double altitude{};
     double vertical_velocity{};
+    std::array<double, 3> position_ecef{};
+    std::array<double, 3> velocity_ecef{};
     std::array<double, 4> attitude{};
+    std::array<double, 4> launch_reference_attitude{};
     std::array<double, 3> last_gyro{};
     std::array<double, 3> gyro_bias{};
+    std::array<double, 3> accelerometer_bias{};
     std::array<ChannelHealth, FSW_MAX_SENSOR_CHANNELS> imu_health{};
+    std::array<ChannelHealth, FSW_MAX_SENSOR_CHANNELS>
+        magnetometer_health{};
     std::array<ChannelHealth, FSW_MAX_SENSOR_CHANNELS> barometer_health{};
     std::array<ChannelHealth, FSW_MAX_SENSOR_CHANNELS> gnss_health{};
     bool apogee_seen{};
@@ -487,18 +558,24 @@ struct Context {
     uint32_t disagreement_flags{};
     uint32_t sensor_status_flags{};
     uint32_t imu_usable_mask{};
+    uint32_t magnetometer_usable_mask{};
     uint32_t barometer_usable_mask{};
     uint32_t gnss_usable_mask{};
     uint32_t imu_rejected_mask{};
+    uint32_t magnetometer_rejected_mask{};
     uint32_t barometer_rejected_mask{};
     uint32_t gnss_rejected_mask{};
     bool attitude_valid{};
+    bool attitude_initialized{};
     int32_t navigation_status{};
     bool navigation_initialized{};
     bool gnss_altitude_reference_initialized{};
     double gnss_radius_reference_m{};
     bool time_initialized{};
     double last_time_s{};
+    double step_delta_s{};
+    bool input_timing_mismatch{};
+    double last_integrated_imu_sample_time_s{};
     double last_barometer_sample_time_s{};
     double last_gnss_sample_time_s{};
     double launch_evidence_s{};
@@ -508,11 +585,17 @@ struct Context {
     double imu_loss_evidence_s{};
     double propulsion_loss_evidence_s{};
     std::array<double, FSW_FAULT_COUNT> fault_healthy_time_s{};
-    double ignition_started_s{};
-    double separation_started_s{};
-    double stage2_ignition_started_s{};
+    double launch_commanded_s{};
+    double ignition_confirmed_s{};
+    double burnout_detected_s{};
+    double separation_commanded_s{};
+    double separation_confirmed_s{};
+    double stage2_ignition_commanded_s{};
+    double stage2_ignition_confirmed_s{};
     double drogue_commanded_s{};
     double main_commanded_s{};
+    uint64_t next_discrete_actuation_sequence{};
+    FswDiscreteActuationCommand discrete_actuation{};
     uint64_t last_command_sequence{};
     uint64_t command_sequence{};
     int32_t command_type{};
@@ -600,6 +683,40 @@ bool evaluate_imu_channel(
     const FswConfig& config
 ) {
     health.flags = 0;
+    health.age_s = sample.accel_valid || sample.gyro_valid
+        ? std::max(time_s - sample.sample_time_s, 0.0)
+        : 0.0;
+    if (!sample.accel_valid || !sample.gyro_valid) {
+        health.flags |= FSW_SENSOR_HEALTH_INVALID;
+        return false;
+    }
+    if (!fresh(
+        true, sample.sample_time_s, time_s, config.imu_timeout_s
+    )) {
+        health.flags |= FSW_SENSOR_HEALTH_STALE;
+        return false;
+    }
+    if (
+        vector_norm(sample.acceleration_body_m_s2, 3)
+            > config.max_acceleration_m_s2
+        || vector_norm(sample.gyro_body_rad_s, 3) > config.max_gyro_rad_s
+    ) {
+        health.flags |= FSW_SENSOR_HEALTH_OUT_OF_RANGE;
+        return false;
+    }
+    if (health.rejected) {
+        health.flags |= FSW_SENSOR_HEALTH_REJECTED;
+    }
+    return true;
+}
+
+bool evaluate_magnetometer_channel(
+    ChannelHealth& health,
+    const FswMagnetometerSample& sample,
+    double time_s,
+    const FswConfig& config
+) {
+    health.flags = 0;
     health.age_s = sample.valid
         ? std::max(time_s - sample.sample_time_s, 0.0)
         : 0.0;
@@ -613,13 +730,10 @@ bool evaluate_imu_channel(
         health.flags |= FSW_SENSOR_HEALTH_STALE;
         return false;
     }
-    const double magnetic_norm = vector_norm(sample.magnetic_body, 3);
+    const double norm = vector_norm(sample.magnetic_body, 3);
     if (
-        vector_norm(sample.acceleration_body_m_s2, 3)
-            > config.max_acceleration_m_s2
-        || vector_norm(sample.gyro_body_rad_s, 3) > config.max_gyro_rad_s
-        || magnetic_norm < config.min_magnetic_norm
-        || magnetic_norm > config.max_magnetic_norm
+        norm < config.min_magnetic_norm
+        || norm > config.max_magnetic_norm
     ) {
         health.flags |= FSW_SENSOR_HEALTH_OUT_OF_RANGE;
         return false;
@@ -658,20 +772,28 @@ bool evaluate_barometer_channel(
         return false;
     }
     if (
-        health.last_value_time_s >= 0.0
-        && sample.sample_time_s > health.last_value_time_s + kEpsilon
-        && std::abs(sample.altitude_m - health.last_values[0])
-            / (sample.sample_time_s - health.last_value_time_s)
+        health.last_accepted_time_s >= 0.0
+        && sample.sample_time_s
+            > health.last_accepted_time_s + kEpsilon
+        && std::abs(
+            sample.altitude_m - health.last_accepted_values[0]
+        ) / (sample.sample_time_s - health.last_accepted_time_s)
             > config.max_barometer_rate_m_s
     ) {
         health.flags |= FSW_SENSOR_HEALTH_RATE_LIMIT;
-        health.last_values[0] = sample.altitude_m;
-        health.last_value_time_s = sample.sample_time_s;
+        health.last_seen_values[0] = sample.altitude_m;
+        health.last_seen_time_s = sample.sample_time_s;
         return false;
     }
-    if (sample.sample_time_s > health.last_value_time_s + kEpsilon) {
-        health.last_values[0] = sample.altitude_m;
-        health.last_value_time_s = sample.sample_time_s;
+    if (sample.sample_time_s > health.last_seen_time_s + kEpsilon) {
+        health.last_seen_values[0] = sample.altitude_m;
+        health.last_seen_time_s = sample.sample_time_s;
+    }
+    if (
+        sample.sample_time_s > health.last_accepted_time_s + kEpsilon
+    ) {
+        health.last_accepted_values[0] = sample.altitude_m;
+        health.last_accepted_time_s = sample.sample_time_s;
     }
     if (health.rejected) {
         health.flags |= FSW_SENSOR_HEALTH_REJECTED;
@@ -710,29 +832,39 @@ bool evaluate_gnss_channel(
         return false;
     }
     if (
-        health.last_value_time_s >= 0.0
-        && sample.sample_time_s > health.last_value_time_s + kEpsilon
+        health.last_accepted_time_s >= 0.0
+        && sample.sample_time_s
+            > health.last_accepted_time_s + kEpsilon
         && vector_distance(
             sample.gnss_velocity_ecef_m_s,
-            health.last_values.data(),
+            health.last_accepted_values.data(),
             3
-        ) / (sample.sample_time_s - health.last_value_time_s)
+        ) / (sample.sample_time_s - health.last_accepted_time_s)
             > config.max_gnss_velocity_rate_m_s2
     ) {
         health.flags |= FSW_SENSOR_HEALTH_RATE_LIMIT;
         for (int axis = 0; axis < 3; ++axis) {
-            health.last_values[axis] =
+            health.last_seen_values[axis] =
                 sample.gnss_velocity_ecef_m_s[axis];
         }
-        health.last_value_time_s = sample.sample_time_s;
+        health.last_seen_time_s = sample.sample_time_s;
         return false;
     }
-    if (sample.sample_time_s > health.last_value_time_s + kEpsilon) {
+    if (sample.sample_time_s > health.last_seen_time_s + kEpsilon) {
         for (int axis = 0; axis < 3; ++axis) {
-            health.last_values[axis] =
+            health.last_seen_values[axis] =
                 sample.gnss_velocity_ecef_m_s[axis];
         }
-        health.last_value_time_s = sample.sample_time_s;
+        health.last_seen_time_s = sample.sample_time_s;
+    }
+    if (
+        sample.sample_time_s > health.last_accepted_time_s + kEpsilon
+    ) {
+        for (int axis = 0; axis < 3; ++axis) {
+            health.last_accepted_values[axis] =
+                sample.gnss_velocity_ecef_m_s[axis];
+        }
+        health.last_accepted_time_s = sample.sample_time_s;
     }
     if (health.rejected) {
         health.flags |= FSW_SENSOR_HEALTH_REJECTED;
@@ -752,19 +884,23 @@ bool imu_samples_agree(
     const bool gyro_agrees = vector_distance(
         left.gyro_body_rad_s, right.gyro_body_rad_s, 3
     ) <= config.gyro_disagreement_rad_s;
-    const bool magnetic_agrees = vector_distance(
-        left.magnetic_body, right.magnetic_body, 3
-    ) <= config.magnetic_disagreement;
     if (!acceleration_agrees) {
         disagreement_flags |= FSW_DISAGREEMENT_ACCELERATION;
     }
     if (!gyro_agrees) {
         disagreement_flags |= FSW_DISAGREEMENT_GYRO;
     }
-    if (!magnetic_agrees) {
-        disagreement_flags |= FSW_DISAGREEMENT_MAGNETOMETER;
-    }
-    return acceleration_agrees && gyro_agrees && magnetic_agrees;
+    return acceleration_agrees && gyro_agrees;
+}
+
+bool magnetometer_samples_agree(
+    const FswMagnetometerSample& left,
+    const FswMagnetometerSample& right,
+    const FswConfig& config
+) {
+    return vector_distance(
+        left.magnetic_body, right.magnetic_body, 3
+    ) <= config.magnetic_disagreement;
 }
 
 void average_imus(
@@ -782,7 +918,6 @@ void average_imus(
             voted.acceleration[axis] +=
                 sample.acceleration_body_m_s2[axis] / divisor;
             voted.gyro[axis] += sample.gyro_body_rad_s[axis] / divisor;
-            voted.magnetic[axis] += sample.magnetic_body[axis] / divisor;
         }
         voted.imu_sample_time_s = std::max(
             voted.imu_sample_time_s, sample.sample_time_s
@@ -837,7 +972,6 @@ void vote_imus(
     } else if (healthy_count == 3) {
         double acceleration_median[3]{};
         double gyro_median[3]{};
-        double magnetic_median[3]{};
         for (int axis = 0; axis < 3; ++axis) {
             acceleration_median[axis] = median3(
                 suite.imus[0].acceleration_body_m_s2[axis],
@@ -848,11 +982,6 @@ void vote_imus(
                 suite.imus[0].gyro_body_rad_s[axis],
                 suite.imus[1].gyro_body_rad_s[axis],
                 suite.imus[2].gyro_body_rad_s[axis]
-            );
-            magnetic_median[axis] = median3(
-                suite.imus[0].magnetic_body[axis],
-                suite.imus[1].magnetic_body[axis],
-                suite.imus[2].magnetic_body[axis]
             );
         }
         for (uint32_t index = 0; index < suite.imu_count; ++index) {
@@ -866,12 +995,7 @@ void vote_imus(
                 gyro_median,
                 3
             ) <= context.config.gyro_disagreement_rad_s;
-            const bool magnetic_agrees = vector_distance(
-                suite.imus[index].magnetic_body,
-                magnetic_median,
-                3
-            ) <= context.config.magnetic_disagreement;
-            if (acceleration_agrees && gyro_agrees && magnetic_agrees) {
+            if (acceleration_agrees && gyro_agrees) {
                 consensus_mask |= 1u << index;
             } else {
                 if (!acceleration_agrees) {
@@ -880,10 +1004,6 @@ void vote_imus(
                 }
                 if (!gyro_agrees) {
                     voted.disagreement_flags |= FSW_DISAGREEMENT_GYRO;
-                }
-                if (!magnetic_agrees) {
-                    voted.disagreement_flags |=
-                        FSW_DISAGREEMENT_MAGNETOMETER;
                 }
             }
         }
@@ -920,6 +1040,161 @@ void vote_imus(
                 fused,
                 context.config,
                 ignored_flags
+            );
+        }
+        observe_channel(
+            health,
+            agrees,
+            healthy_count >= 3,
+            context.config
+        );
+        if (health.rejected) {
+            health.flags |= FSW_SENSOR_HEALTH_REJECTED;
+        }
+    }
+}
+
+void average_magnetometers(
+    const FswSensorSuite& suite,
+    uint32_t mask,
+    VotedSensors& voted
+) {
+    const double divisor = static_cast<double>(bit_count(mask));
+    for (
+        uint32_t index = 0;
+        index < suite.magnetometer_count;
+        ++index
+    ) {
+        if ((mask & (1u << index)) == 0) {
+            continue;
+        }
+        const auto& sample = suite.magnetometers[index];
+        for (int axis = 0; axis < 3; ++axis) {
+            voted.magnetic[axis] += sample.magnetic_body[axis] / divisor;
+        }
+        voted.magnetometer_sample_time_s = std::max(
+            voted.magnetometer_sample_time_s,
+            sample.sample_time_s
+        );
+    }
+    voted.magnetometer_usable_mask = mask;
+    voted.magnetometer_valid = mask != 0;
+}
+
+void vote_magnetometers(
+    Context& context,
+    const FswSensorSuite& suite,
+    VotedSensors& voted
+) {
+    uint32_t fresh_mask = 0;
+    uint32_t healthy_mask = 0;
+    for (
+        uint32_t index = 0;
+        index < suite.magnetometer_count;
+        ++index
+    ) {
+        const auto& sample = suite.magnetometers[index];
+        if (evaluate_magnetometer_channel(
+            context.magnetometer_health[index],
+            sample,
+            suite.time_s,
+            context.config
+        )) {
+            fresh_mask |= 1u << index;
+            if (!context.magnetometer_health[index].rejected) {
+                healthy_mask |= 1u << index;
+            }
+        }
+    }
+
+    uint32_t consensus_mask = 0;
+    const uint32_t healthy_count = bit_count(healthy_mask);
+    if (healthy_count == 1) {
+        consensus_mask = healthy_mask;
+    } else if (healthy_count == 2) {
+        int indices[2]{};
+        int found = 0;
+        for (
+            uint32_t index = 0;
+            index < suite.magnetometer_count;
+            ++index
+        ) {
+            if (healthy_mask & (1u << index)) {
+                indices[found++] = static_cast<int>(index);
+            }
+        }
+        if (magnetometer_samples_agree(
+            suite.magnetometers[indices[0]],
+            suite.magnetometers[indices[1]],
+            context.config
+        )) {
+            consensus_mask = healthy_mask;
+        } else {
+            voted.disagreement_flags |=
+                FSW_DISAGREEMENT_MAGNETOMETER;
+        }
+    } else if (healthy_count == 3) {
+        double center[3]{};
+        for (int axis = 0; axis < 3; ++axis) {
+            center[axis] = median3(
+                suite.magnetometers[0].magnetic_body[axis],
+                suite.magnetometers[1].magnetic_body[axis],
+                suite.magnetometers[2].magnetic_body[axis]
+            );
+        }
+        for (
+            uint32_t index = 0;
+            index < suite.magnetometer_count;
+            ++index
+        ) {
+            if (
+                vector_distance(
+                    suite.magnetometers[index].magnetic_body,
+                    center,
+                    3
+                ) <= context.config.magnetic_disagreement
+            ) {
+                consensus_mask |= 1u << index;
+            } else {
+                voted.disagreement_flags |=
+                    FSW_DISAGREEMENT_MAGNETOMETER;
+            }
+        }
+        if (bit_count(consensus_mask) < 2) {
+            consensus_mask = 0;
+        }
+    }
+
+    if (consensus_mask != 0) {
+        average_magnetometers(suite, consensus_mask, voted);
+    }
+    for (
+        uint32_t index = 0;
+        index < suite.magnetometer_count;
+        ++index
+    ) {
+        if ((fresh_mask & (1u << index)) == 0) {
+            continue;
+        }
+        auto& health = context.magnetometer_health[index];
+        if (!new_sample(
+            health, suite.magnetometers[index].sample_time_s
+        )) {
+            continue;
+        }
+        bool agrees = (consensus_mask & (1u << index)) != 0;
+        if (!agrees) {
+            health.flags |= FSW_SENSOR_HEALTH_DISAGREEMENT;
+        }
+        if (health.rejected && voted.magnetometer_valid) {
+            FswMagnetometerSample fused{};
+            for (int axis = 0; axis < 3; ++axis) {
+                fused.magnetic_body[axis] = voted.magnetic[axis];
+            }
+            agrees = magnetometer_samples_agree(
+                suite.magnetometers[index],
+                fused,
+                context.config
             );
         }
         observe_channel(
@@ -1056,10 +1331,7 @@ bool gnss_samples_agree(
     ) <= config.gnss_position_disagreement_m;
     const bool velocity_agrees = vector_distance(
         left.gnss_velocity_ecef_m_s, right.gnss_velocity_ecef_m_s, 3
-    ) <= config.gnss_velocity_disagreement_m_s
-        && std::abs(
-            left.vertical_velocity_m_s - right.vertical_velocity_m_s
-        ) <= config.gnss_velocity_disagreement_m_s;
+    ) <= config.gnss_velocity_disagreement_m_s;
     if (!position_agrees) {
         disagreement_flags |= FSW_DISAGREEMENT_GNSS_POSITION;
     }
@@ -1086,13 +1358,16 @@ void average_gnss(
             voted.gnss_velocity[axis] +=
                 sample.gnss_velocity_ecef_m_s[axis] / divisor;
         }
-        voted.vertical_velocity += sample.vertical_velocity_m_s / divisor;
         voted.gnss_sample_time_s = std::max(
             voted.gnss_sample_time_s, sample.sample_time_s
         );
     }
     voted.gnss_usable_mask = mask;
     voted.gnss_valid = mask != 0;
+    voted.vertical_velocity = radial_velocity(
+        voted.gnss_position.data(),
+        voted.gnss_velocity.data()
+    );
 }
 
 void vote_gnss(
@@ -1152,11 +1427,6 @@ void vote_gnss(
                 suite.gnss[2].gnss_velocity_ecef_m_s[axis]
             );
         }
-        const double vertical_median = median3(
-            suite.gnss[0].vertical_velocity_m_s,
-            suite.gnss[1].vertical_velocity_m_s,
-            suite.gnss[2].vertical_velocity_m_s
-        );
         for (uint32_t index = 0; index < suite.gnss_count; ++index) {
             const bool position_agrees = vector_distance(
                 suite.gnss[index].gnss_position_ecef_m,
@@ -1167,11 +1437,7 @@ void vote_gnss(
                 suite.gnss[index].gnss_velocity_ecef_m_s,
                 velocity_median,
                 3
-            ) <= context.config.gnss_velocity_disagreement_m_s
-                && std::abs(
-                    suite.gnss[index].vertical_velocity_m_s
-                    - vertical_median
-                ) <= context.config.gnss_velocity_disagreement_m_s;
+            ) <= context.config.gnss_velocity_disagreement_m_s;
             if (position_agrees && velocity_agrees) {
                 consensus_mask |= 1u << index;
             } else {
@@ -1213,7 +1479,6 @@ void vote_gnss(
                 fused.gnss_velocity_ecef_m_s[axis] =
                     voted.gnss_velocity[axis];
             }
-            fused.vertical_velocity_m_s = voted.vertical_velocity;
             uint32_t ignored_flags = 0;
             agrees = gnss_samples_agree(
                 suite.gnss[index],
@@ -1237,14 +1502,20 @@ void vote_gnss(
 VotedSensors vote_sensors(Context& context, const FswSensorSuite& suite) {
     VotedSensors voted{};
     vote_imus(context, suite, voted);
+    vote_magnetometers(context, suite, voted);
     vote_barometers(context, suite, voted);
     vote_gnss(context, suite, voted);
 
     context.imu_usable_mask = voted.imu_usable_mask;
+    context.magnetometer_usable_mask =
+        voted.magnetometer_usable_mask;
     context.barometer_usable_mask = voted.barometer_usable_mask;
     context.gnss_usable_mask = voted.gnss_usable_mask;
     context.imu_rejected_mask = rejected_mask(
         context.imu_health, suite.imu_count
+    );
+    context.magnetometer_rejected_mask = rejected_mask(
+        context.magnetometer_health, suite.magnetometer_count
     );
     context.barometer_rejected_mask = rejected_mask(
         context.barometer_health, suite.barometer_count
@@ -1256,6 +1527,10 @@ VotedSensors vote_sensors(Context& context, const FswSensorSuite& suite) {
     context.sensor_status_flags = 0;
     if (bit_count(voted.imu_usable_mask) == 1) {
         context.sensor_status_flags |= FSW_SENSOR_STATUS_IMU_SINGLE_SOURCE;
+    }
+    if (bit_count(voted.magnetometer_usable_mask) == 1) {
+        context.sensor_status_flags |=
+            FSW_SENSOR_STATUS_MAGNETOMETER_SINGLE_SOURCE;
     }
     if (bit_count(voted.barometer_usable_mask) == 1) {
         context.sensor_status_flags |=
@@ -1280,6 +1555,155 @@ void normalize(std::array<double, 4>& quaternion) {
     for (double& value : quaternion) {
         value /= norm;
     }
+}
+
+std::array<double, 3> cross(
+    const std::array<double, 3>& left,
+    const std::array<double, 3>& right
+) {
+    return {
+        left[1] * right[2] - left[2] * right[1],
+        left[2] * right[0] - left[0] * right[2],
+        left[0] * right[1] - left[1] * right[0],
+    };
+}
+
+std::array<double, 3> unit(
+    const std::array<double, 3>& vector,
+    const std::array<double, 3>& fallback = {1.0, 0.0, 0.0}
+) {
+    const double length = vector_norm(vector.data(), 3);
+    if (length < kEpsilon) {
+        return fallback;
+    }
+    return {
+        vector[0] / length,
+        vector[1] / length,
+        vector[2] / length,
+    };
+}
+
+std::array<double, 4> multiply(
+    const std::array<double, 4>& left,
+    const std::array<double, 4>& right
+) {
+    return {
+        left[0] * right[0] - left[1] * right[1]
+            - left[2] * right[2] - left[3] * right[3],
+        left[0] * right[1] + left[1] * right[0]
+            + left[2] * right[3] - left[3] * right[2],
+        left[0] * right[2] - left[1] * right[3]
+            + left[2] * right[0] + left[3] * right[1],
+        left[0] * right[3] + left[1] * right[2]
+            - left[2] * right[1] + left[3] * right[0],
+    };
+}
+
+std::array<double, 4> conjugate(
+    const std::array<double, 4>& quaternion
+) {
+    return {
+        quaternion[0],
+        -quaternion[1],
+        -quaternion[2],
+        -quaternion[3],
+    };
+}
+
+std::array<double, 3> rotate(
+    const std::array<double, 4>& quaternion,
+    const std::array<double, 3>& vector
+) {
+    const std::array<double, 4> pure{
+        0.0, vector[0], vector[1], vector[2]
+    };
+    const auto rotated = multiply(
+        multiply(quaternion, pure), conjugate(quaternion)
+    );
+    return {rotated[1], rotated[2], rotated[3]};
+}
+
+std::array<double, 4> quaternion_from_matrix(
+    const std::array<std::array<double, 3>, 3>& matrix
+) {
+    std::array<double, 4> result{};
+    const double trace = matrix[0][0] + matrix[1][1] + matrix[2][2];
+    if (trace > 0.0) {
+        const double scale = 2.0 * std::sqrt(trace + 1.0);
+        result = {
+            0.25 * scale,
+            (matrix[2][1] - matrix[1][2]) / scale,
+            (matrix[0][2] - matrix[2][0]) / scale,
+            (matrix[1][0] - matrix[0][1]) / scale,
+        };
+    } else if (
+        matrix[0][0] > matrix[1][1]
+        && matrix[0][0] > matrix[2][2]
+    ) {
+        const double scale = 2.0 * std::sqrt(
+            1.0 + matrix[0][0] - matrix[1][1] - matrix[2][2]
+        );
+        result = {
+            (matrix[2][1] - matrix[1][2]) / scale,
+            0.25 * scale,
+            (matrix[0][1] + matrix[1][0]) / scale,
+            (matrix[0][2] + matrix[2][0]) / scale,
+        };
+    } else if (matrix[1][1] > matrix[2][2]) {
+        const double scale = 2.0 * std::sqrt(
+            1.0 + matrix[1][1] - matrix[0][0] - matrix[2][2]
+        );
+        result = {
+            (matrix[0][2] - matrix[2][0]) / scale,
+            (matrix[0][1] + matrix[1][0]) / scale,
+            0.25 * scale,
+            (matrix[1][2] + matrix[2][1]) / scale,
+        };
+    } else {
+        const double scale = 2.0 * std::sqrt(
+            1.0 + matrix[2][2] - matrix[0][0] - matrix[1][1]
+        );
+        result = {
+            (matrix[1][0] - matrix[0][1]) / scale,
+            (matrix[0][2] + matrix[2][0]) / scale,
+            (matrix[1][2] + matrix[2][1]) / scale,
+            0.25 * scale,
+        };
+    }
+    normalize(result);
+    return result;
+}
+
+std::array<double, 4> launch_attitude(
+    const std::array<double, 3>& position_ecef,
+    double azimuth_rad
+) {
+    const auto up = unit(position_ecef);
+    const auto east = unit(
+        std::array<double, 3>{-up[1], up[0], 0.0},
+        {0.0, 1.0, 0.0}
+    );
+    const auto north = unit(cross(up, east), {0.0, 0.0, 1.0});
+    std::array<double, 3> body_y{};
+    for (int axis = 0; axis < 3; ++axis) {
+        body_y[axis] = std::cos(azimuth_rad) * east[axis]
+            - std::sin(azimuth_rad) * north[axis];
+    }
+    const auto body_z = unit(cross(up, body_y));
+    return quaternion_from_matrix({{
+        {up[0], body_y[0], body_z[0]},
+        {up[1], body_y[1], body_z[1]},
+        {up[2], body_y[2], body_z[2]},
+    }});
+}
+
+std::array<double, 4> relative_attitude(const Context& context) {
+    auto relative = multiply(
+        conjugate(context.launch_reference_attitude),
+        context.attitude
+    );
+    normalize(relative);
+    return relative;
 }
 
 void update_gyro_bias(
@@ -1450,7 +1874,7 @@ void set_faults(
         input.air_data.valid,
         input.air_data.sample_time_s,
         suite.time_s,
-        context.config.imu_timeout_s
+        context.config.air_data_timeout_s
     );
     if (!air_data_valid) {
         flags |= FSW_FAULT_AIR_DATA_UNAVAILABLE;
@@ -1459,7 +1883,7 @@ void set_faults(
         input.propulsion.valid,
         input.propulsion.sample_time_s,
         suite.time_s,
-        context.config.imu_timeout_s
+        context.config.propulsion_status_timeout_s
     );
     if (!propulsion_valid) {
         flags |= FSW_FAULT_PROPULSION_UNAVAILABLE;
@@ -1481,7 +1905,13 @@ void set_faults(
     ) {
         flags |= FSW_FAULT_NAV_UNCERTAINTY;
     }
-    if (input.platform.valid) {
+    const bool platform_valid = fresh(
+        input.platform.valid,
+        input.platform.sample_time_s,
+        suite.time_s,
+        context.config.platform_status_timeout_s
+    );
+    if (platform_valid) {
         context.previous_execution_time_s =
             input.platform.previous_execution_time_s;
         const bool overrun = input.platform.deadline_missed
@@ -1496,6 +1926,12 @@ void set_faults(
         if (!input.platform.watchdog_healthy) {
             flags |= FSW_FAULT_WATCHDOG;
         }
+    } else {
+        context.consecutive_overruns = 0;
+        flags |= FSW_FAULT_WATCHDOG;
+    }
+    if (context.input_timing_mismatch) {
+        flags |= FSW_FAULT_INPUT_TIMING;
     }
     flags |= context.active_fault_flags & (
         FSW_FAULT_LAUNCH_NOT_CONFIRMED
@@ -1503,14 +1939,13 @@ void set_faults(
         | FSW_FAULT_STAGE2_IGNITION
         | FSW_FAULT_DROGUE_NOT_CONFIRMED
         | FSW_FAULT_MAIN_NOT_CONFIRMED
-        | FSW_FAULT_INPUT_TIMING
     );
     for (uint32_t index = 0; index < FSW_FAULT_COUNT; ++index) {
         const uint32_t bit = 1u << index;
         if (flags & bit) {
             context.fault_healthy_time_s[index] = 0.0;
         } else if (context.active_fault_flags & bit) {
-            context.fault_healthy_time_s[index] += suite.dt_s;
+            context.fault_healthy_time_s[index] += context.step_delta_s;
             if (
                 context.fault_healthy_time_s[index]
                 < context.config.fault_recovery_persistence_s
@@ -1529,72 +1964,107 @@ void update_navigation(
     const FswInput& input,
     const VotedSensors& voted
 ) {
-    const auto& suite = input.sensors;
-    context.attitude_valid = voted.imu_valid;
-    if (voted.imu_valid) {
-        update_gyro_bias(context, voted, suite.dt_s);
-        std::array<double, 3> corrected_gyro{};
-        for (int axis = 0; axis < 3; ++axis) {
-            corrected_gyro[axis] =
-                voted.gyro[axis] - context.gyro_bias[axis];
-        }
-        integrate_attitude(context, corrected_gyro, suite.dt_s);
-        const double attitude_process =
-            context.config.gyro_process_sigma_rad_s * suite.dt_s;
-        for (double& variance : context.attitude_variance) {
-            variance += attitude_process * attitude_process;
-        }
-    } else {
-        for (double& variance : context.attitude_variance) {
-            variance += context.config.max_attitude_sigma_rad
-                * context.config.max_attitude_sigma_rad
-                * suite.dt_s;
-        }
-    }
-
-    if (!context.navigation_initialized) {
+    if (!context.navigation_initialized && voted.gnss_valid) {
+        context.position_ecef = voted.gnss_position;
+        context.velocity_ecef = voted.gnss_velocity;
         context.altitude = voted.barometer_valid
             ? voted.barometric_altitude
             : 0.0;
-        context.vertical_velocity = voted.gnss_valid
-            ? voted.vertical_velocity
-            : 0.0;
-        if (voted.gnss_valid) {
-            context.gnss_radius_reference_m = vector_norm(
-                voted.gnss_position.data(), 3
-            ) - context.altitude;
-            context.gnss_altitude_reference_initialized = true;
-        }
+        context.gnss_radius_reference_m = vector_norm(
+            context.position_ecef.data(), 3
+        ) - context.altitude;
+        context.gnss_altitude_reference_initialized = true;
+        context.launch_reference_attitude = launch_attitude(
+            context.position_ecef, context.config.launch_azimuth_rad
+        );
+        context.attitude = context.launch_reference_attitude;
+        context.attitude_initialized = true;
+        context.navigation_initialized = true;
+        context.last_gnss_sample_time_s = voted.gnss_sample_time_s;
         context.last_barometer_sample_time_s = voted.barometer_valid
             ? voted.barometer_sample_time_s
             : -1.0;
-        context.last_gnss_sample_time_s = voted.gnss_valid
-            ? voted.gnss_sample_time_s
+        context.last_integrated_imu_sample_time_s = voted.imu_valid
+            ? voted.imu_sample_time_s
             : -1.0;
-        context.navigation_initialized = true;
-    } else {
-        context.altitude += context.vertical_velocity * suite.dt_s;
-        context.altitude_variance +=
-            context.velocity_variance * suite.dt_s * suite.dt_s;
-        if (voted.imu_valid) {
-            context.vertical_velocity +=
-                voted.acceleration[0] * suite.dt_s;
-            const double velocity_process =
-                context.config.accelerometer_process_sigma_m_s2
-                * suite.dt_s;
-            context.velocity_variance +=
-                velocity_process * velocity_process;
-        }
     }
 
-    if (
-        voted.gnss_valid
-        && !context.gnss_altitude_reference_initialized
-    ) {
-        context.gnss_radius_reference_m = vector_norm(
-            voted.gnss_position.data(), 3
-        ) - context.altitude;
-        context.gnss_altitude_reference_initialized = true;
+    context.attitude_valid =
+        context.attitude_initialized && voted.imu_valid;
+    const bool newer_imu = voted.imu_valid
+        && context.navigation_initialized
+        && voted.imu_sample_time_s
+            > context.last_integrated_imu_sample_time_s + kEpsilon;
+    if (newer_imu) {
+        const double imu_delta_s =
+            context.last_integrated_imu_sample_time_s < 0.0
+                ? context.step_delta_s
+                : voted.imu_sample_time_s
+                    - context.last_integrated_imu_sample_time_s;
+        update_gyro_bias(context, voted, imu_delta_s);
+        std::array<double, 3> corrected_gyro{};
+        std::array<double, 3> corrected_acceleration{};
+        for (int axis = 0; axis < 3; ++axis) {
+            corrected_gyro[axis] =
+                voted.gyro[axis] - context.gyro_bias[axis];
+            corrected_acceleration[axis] =
+                voted.acceleration[axis]
+                - context.accelerometer_bias[axis];
+        }
+        integrate_attitude(context, corrected_gyro, imu_delta_s);
+        const auto specific_force_ecef = rotate(
+            context.attitude, corrected_acceleration
+        );
+        const double radius = std::max(
+            vector_norm(context.position_ecef.data(), 3),
+            kEarthRadiusM
+        );
+        std::array<double, 3> gravity{};
+        for (int axis = 0; axis < 3; ++axis) {
+            gravity[axis] = -kEarthMuM3S2
+                * context.position_ecef[axis]
+                / (radius * radius * radius);
+        }
+        const std::array<double, 3> earth_rate{
+            0.0, 0.0, kEarthRotationRadS
+        };
+        const auto coriolis = cross(earth_rate, context.velocity_ecef);
+        const auto centrifugal = cross(
+            earth_rate, cross(earth_rate, context.position_ecef)
+        );
+        for (int axis = 0; axis < 3; ++axis) {
+            const double acceleration_ecef =
+                specific_force_ecef[axis]
+                + gravity[axis]
+                - 2.0 * coriolis[axis]
+                - centrifugal[axis];
+            context.position_ecef[axis] +=
+                context.velocity_ecef[axis] * imu_delta_s
+                + 0.5 * acceleration_ecef
+                    * imu_delta_s * imu_delta_s;
+            context.velocity_ecef[axis] +=
+                acceleration_ecef * imu_delta_s;
+        }
+        context.last_integrated_imu_sample_time_s =
+            voted.imu_sample_time_s;
+        const double attitude_process =
+            context.config.gyro_process_sigma_rad_s * imu_delta_s;
+        for (double& variance : context.attitude_variance) {
+            variance += attitude_process * attitude_process;
+        }
+        const double velocity_process =
+            context.config.accelerometer_process_sigma_m_s2
+            * imu_delta_s;
+        context.velocity_variance +=
+            velocity_process * velocity_process;
+        context.altitude_variance +=
+            context.velocity_variance * imu_delta_s * imu_delta_s;
+    } else if (!voted.imu_valid) {
+        for (double& variance : context.attitude_variance) {
+            variance += context.config.max_attitude_sigma_rad
+                * context.config.max_attitude_sigma_rad
+                * context.step_delta_s;
+        }
     }
 
     bool use_barometer = voted.barometer_valid;
@@ -1652,7 +2122,7 @@ void update_navigation(
             > context.last_barometer_sample_time_s + kEpsilon
     ) {
         const double delta_s = context.last_barometer_sample_time_s < 0.0
-            ? suite.dt_s
+            ? context.step_delta_s
             : voted.barometer_sample_time_s
                 - context.last_barometer_sample_time_s;
         const double alpha = filter_alpha(
@@ -1660,7 +2130,13 @@ void update_navigation(
         );
         context.barometer_innovation =
             voted.barometric_altitude - context.altitude;
-        context.altitude += alpha * context.barometer_innovation;
+        if (context.navigation_initialized) {
+            const auto up = unit(context.position_ecef);
+            for (int axis = 0; axis < 3; ++axis) {
+                context.position_ecef[axis] +=
+                    alpha * context.barometer_innovation * up[axis];
+            }
+        }
         const double measurement_variance =
             context.config.barometer_sigma_m
             * context.config.barometer_sigma_m;
@@ -1677,15 +2153,26 @@ void update_navigation(
             > context.last_gnss_sample_time_s + kEpsilon
     ) {
         const double delta_s = context.last_gnss_sample_time_s < 0.0
-            ? suite.dt_s
+            ? context.step_delta_s
             : voted.gnss_sample_time_s - context.last_gnss_sample_time_s;
         const double alpha = filter_alpha(
             delta_s, context.config.velocity_filter_tau_s
         );
-        context.gnss_velocity_innovation =
-            voted.vertical_velocity - context.vertical_velocity;
-        context.vertical_velocity +=
-            alpha * context.gnss_velocity_innovation;
+        context.gnss_velocity_innovation = voted.vertical_velocity
+            - radial_velocity(
+                context.position_ecef.data(),
+                context.velocity_ecef.data()
+            );
+        for (int axis = 0; axis < 3; ++axis) {
+            context.position_ecef[axis] += alpha * (
+                voted.gnss_position[axis]
+                - context.position_ecef[axis]
+            );
+            context.velocity_ecef[axis] += alpha * (
+                voted.gnss_velocity[axis]
+                - context.velocity_ecef[axis]
+            );
+        }
         const double measurement_variance =
             context.config.gnss_velocity_sigma_m_s
             * context.config.gnss_velocity_sigma_m_s;
@@ -1696,9 +2183,24 @@ void update_navigation(
         context.last_gnss_sample_time_s = voted.gnss_sample_time_s;
     }
 
-    context.navigation_status = use_barometer && use_gnss
+    if (context.navigation_initialized) {
+        context.altitude = vector_norm(
+            context.position_ecef.data(), 3
+        ) - context.gnss_radius_reference_m;
+        context.vertical_velocity = radial_velocity(
+            context.position_ecef.data(),
+            context.velocity_ecef.data()
+        );
+    }
+
+    context.navigation_status = context.navigation_initialized
+        && use_barometer && use_gnss
         ? FSW_NAV_NOMINAL
-        : (use_barometer || use_gnss ? FSW_NAV_DEGRADED : FSW_NAV_INERTIAL);
+        : (
+            context.navigation_initialized && (use_barometer || use_gnss)
+                ? FSW_NAV_DEGRADED
+                : FSW_NAV_INERTIAL
+        );
     set_faults(context, input, voted, navigation_disagreement);
 }
 
@@ -1710,6 +2212,28 @@ bool discrete_asserted(
     return fresh(
         sample.valid, sample.sample_time_s, time_s, timeout_s
     ) && sample.asserted;
+}
+
+bool propulsion_fresh(const Context& context, const FswInput& input) {
+    return fresh(
+        input.propulsion.valid,
+        input.propulsion.sample_time_s,
+        input.sensors.time_s,
+        context.config.propulsion_status_timeout_s
+    );
+}
+
+void request_discrete_actuation(
+    Context& context,
+    int32_t action
+) {
+    context.discrete_actuation.sequence =
+        context.next_discrete_actuation_sequence++;
+    context.discrete_actuation.action = action;
+    context.discrete_actuation.pulse_duration_s =
+        context.step_delta_s;
+    context.discrete_actuation.valid = 1;
+    context.event_flags |= FSW_EVENT_DISCRETE_ACTUATION;
 }
 
 void raise_fault(Context& context, uint32_t fault) {
@@ -1732,7 +2256,7 @@ uint32_t launch_inhibits(
         input.propulsion.valid,
         input.propulsion.sample_time_s,
         input.sensors.time_s,
-        context.config.imu_timeout_s
+        context.config.propulsion_status_timeout_s
     ) && input.propulsion.ready
         && input.propulsion.health_percent
             >= context.config.propulsion_abort_health_percent;
@@ -1821,7 +2345,7 @@ void process_command(
                 return;
             }
             context.mode = FSW_MODE_IGNITION;
-            context.ignition_started_s = input.sensors.time_s;
+            context.launch_commanded_s = input.sensors.time_s;
             context.stage1_ignite_request = true;
             context.command_result = FSW_COMMAND_ACCEPTED;
             return;
@@ -1861,18 +2385,20 @@ void update_integrated_mode(
         case FSW_MODE_IGNITION:
             if (
                 context.attitude_valid
+                && propulsion_fresh(context, input)
                 && input.propulsion.running
                 && persisted(
                     voted.acceleration[0] > 2.0,
-                    suite.dt_s,
+                    context.step_delta_s,
                     0.05,
                     context.launch_evidence_s
                 )
             ) {
+                context.ignition_confirmed_s = suite.time_s;
                 context.mode = FSW_MODE_BOOST_1;
             } else if (
-                context.ignition_started_s >= 0.0
-                && suite.time_s - context.ignition_started_s
+                context.launch_commanded_s >= 0.0
+                && suite.time_s - context.launch_commanded_s
                     > context.config.launch_confirm_timeout_s
             ) {
                 raise_fault(context, FSW_FAULT_LAUNCH_NOT_CONFIRMED);
@@ -1881,32 +2407,45 @@ void update_integrated_mode(
             break;
         case FSW_MODE_BOOST_1:
             if (
-                suite.time_s >= context.config.stage1_burn_s
+                context.ignition_confirmed_s >= 0.0
+                && suite.time_s - context.ignition_confirmed_s
+                    >= context.config.stage1_burn_s
                 && persisted(
                     context.attitude_valid
                         && voted.acceleration[0] < 2.0,
-                    suite.dt_s,
+                    context.step_delta_s,
                     0.05,
                     context.burnout_evidence_s
                 )
             ) {
+                context.burnout_detected_s = suite.time_s;
                 context.mode = FSW_MODE_SEPARATION;
-                context.separation_started_s = suite.time_s;
             }
             break;
         case FSW_MODE_SEPARATION:
             if (
+                context.separation_commanded_s < 0.0
+                && context.burnout_detected_s >= 0.0
+                && suite.time_s - context.burnout_detected_s
+                    >= context.config.separation_delay_s
+            ) {
+                context.separation_commanded_s = suite.time_s;
+                request_discrete_actuation(
+                    context, FSW_DISCRETE_ACTION_STAGE_SEPARATE
+                );
+            }
+            if (
                 discrete_asserted(
                     input.discretes.stage_separated,
                     suite.time_s,
-                    context.config.imu_timeout_s
+                    context.config.discrete_feedback_timeout_s
                 )
             ) {
+                context.separation_confirmed_s = suite.time_s;
                 context.mode = FSW_MODE_INTERSTAGE;
-                context.stage2_ignition_started_s = -1.0;
             } else if (
-                context.separation_started_s >= 0.0
-                && suite.time_s - context.separation_started_s
+                context.separation_commanded_s >= 0.0
+                && suite.time_s - context.separation_commanded_s
                     > context.config.separation_confirm_timeout_s
             ) {
                 raise_fault(
@@ -1917,11 +2456,10 @@ void update_integrated_mode(
             break;
         case FSW_MODE_INTERSTAGE:
             if (
-                context.stage2_ignition_started_s < 0.0
-                && suite.time_s
-                    >= context.config.stage1_burn_s
-                        + context.config.separation_delay_s
-                        + context.config.stage2_ignition_delay_s
+                context.stage2_ignition_commanded_s < 0.0
+                && context.separation_confirmed_s >= 0.0
+                && suite.time_s - context.separation_confirmed_s
+                    >= context.config.stage2_ignition_delay_s
             ) {
                 context.inhibit_flags = launch_inhibits(
                     context, input, voted
@@ -1930,27 +2468,29 @@ void update_integrated_mode(
                     !discrete_asserted(
                         input.discretes.stage_separated,
                         suite.time_s,
-                        context.config.imu_timeout_s
+                        context.config.discrete_feedback_timeout_s
                     )
                 ) {
                     context.inhibit_flags |= FSW_INHIBIT_SEPARATION;
                 }
                 if (context.inhibit_flags == 0) {
                     context.stage2_ignite_request = true;
-                    context.stage2_ignition_started_s = suite.time_s;
+                    context.stage2_ignition_commanded_s =
+                        suite.time_s;
                 }
             }
             if (
-                context.stage2_ignition_started_s >= 0.0
+                context.stage2_ignition_commanded_s >= 0.0
+                && propulsion_fresh(context, input)
                 && input.propulsion.running
             ) {
+                context.stage2_ignition_confirmed_s = suite.time_s;
                 context.mode = FSW_MODE_BOOST_2;
             } else if (
-                suite.time_s
-                    > context.config.stage1_burn_s
-                        + context.config.separation_delay_s
-                        + context.config.stage2_ignition_delay_s
-                        + context.config.stage2_ignition_timeout_s
+                context.stage2_ignition_commanded_s >= 0.0
+                && suite.time_s
+                    - context.stage2_ignition_commanded_s
+                    > context.config.stage2_ignition_timeout_s
             ) {
                 raise_fault(context, FSW_FAULT_STAGE2_IGNITION);
                 context.mode = FSW_MODE_ABORT;
@@ -1958,9 +2498,9 @@ void update_integrated_mode(
             break;
         case FSW_MODE_BOOST_2:
             if (
-                context.stage2_ignition_started_s >= 0.0
+                context.stage2_ignition_confirmed_s >= 0.0
                 && suite.time_s
-                    >= context.stage2_ignition_started_s
+                    >= context.stage2_ignition_confirmed_s
                         + context.config.stage2_burn_s
             ) {
                 context.mode = FSW_MODE_COAST;
@@ -1982,7 +2522,7 @@ void update_mode(
         || context.mode == FSW_MODE_BOOST_2;
     if (persisted(
         powered && !context.attitude_valid,
-        suite.dt_s,
+        context.step_delta_s,
         context.config.imu_loss_abort_delay_s,
         context.imu_loss_evidence_s
     )) {
@@ -1992,11 +2532,11 @@ void update_mode(
     if (persisted(
         powered
             && (
-                !input.propulsion.valid
+                !propulsion_fresh(context, input)
                 || input.propulsion.health_percent
                     < context.config.propulsion_abort_health_percent
             ),
-        suite.dt_s,
+        context.step_delta_s,
         context.config.propulsion_abort_persistence_s,
         context.propulsion_loss_evidence_s
     )) {
@@ -2026,7 +2566,7 @@ void update_mode(
                 discrete_asserted(
                     input.discretes.stage_separated,
                     suite.time_s,
-                    context.config.imu_timeout_s
+                    context.config.discrete_feedback_timeout_s
                 )
                 && context.mode < FSW_MODE_COAST
             ) {
@@ -2056,7 +2596,7 @@ void update_mode(
         && context.altitude > 100.0
         && persisted(
             context.vertical_velocity < -0.5,
-            suite.dt_s,
+            context.step_delta_s,
             0.20,
             context.apogee_evidence_s
         )
@@ -2068,11 +2608,14 @@ void update_mode(
         context.mode = FSW_MODE_DROGUE;
         if (context.drogue_commanded_s < 0.0) {
             context.drogue_commanded_s = suite.time_s;
+            request_discrete_actuation(
+                context, FSW_DISCRETE_ACTION_DEPLOY_DROGUE
+            );
         }
         context.drogue_deployed = discrete_asserted(
             input.discretes.drogue_deployed,
             suite.time_s,
-            context.config.imu_timeout_s
+            context.config.discrete_feedback_timeout_s
         );
         if (
             !context.drogue_deployed
@@ -2091,11 +2634,14 @@ void update_mode(
         context.mode = FSW_MODE_MAIN;
         if (context.main_commanded_s < 0.0) {
             context.main_commanded_s = suite.time_s;
+            request_discrete_actuation(
+                context, FSW_DISCRETE_ACTION_DEPLOY_MAIN
+            );
         }
         context.main_deployed = discrete_asserted(
             input.discretes.main_deployed,
             suite.time_s,
-            context.config.imu_timeout_s
+            context.config.discrete_feedback_timeout_s
         );
         if (
             !context.main_deployed
@@ -2111,7 +2657,7 @@ void update_mode(
         && persisted(
             context.altitude <= 2.0
                 && std::abs(context.vertical_velocity) < 15.0,
-            suite.dt_s,
+            context.step_delta_s,
             1.0,
             context.landing_evidence_s
         )
@@ -2160,8 +2706,11 @@ void calculate_controls(
     ) {
         return;
     }
-    const auto target = guidance_at(context.config, suite.time_s);
-    const auto angles = euler(context.attitude);
+    const double guidance_time_s = context.ignition_confirmed_s >= 0.0
+        ? std::max(suite.time_s - context.ignition_confirmed_s, 0.0)
+        : 0.0;
+    const auto target = guidance_at(context.config, guidance_time_s);
+    const auto angles = euler(relative_attitude(context));
     const double roll_error = -angles[0];
     const double pitch_error = target.pitch_rad - angles[1];
     const double yaw_error = wrap_angle(
@@ -2182,7 +2731,7 @@ void calculate_controls(
         input.air_data.valid,
         input.air_data.sample_time_s,
         suite.time_s,
-        context.config.imu_timeout_s
+        context.config.air_data_timeout_s
     );
     const double aero_blend = air_data_valid
         ? clamp(
@@ -2225,8 +2774,19 @@ void populate_output(const Context& context, FswOutput& output) {
     output.navigation_status = context.navigation_status;
     output.stage1_ignite = context.stage1_ignite_request;
     output.stage2_ignite = context.stage2_ignite_request;
-    output.deploy_drogue = context.drogue_commanded_s >= 0.0;
-    output.deploy_main = context.main_commanded_s >= 0.0;
+    output.discrete_actuation = context.discrete_actuation;
+    output.stage_separate =
+        context.discrete_actuation.valid
+        && context.discrete_actuation.action
+            == FSW_DISCRETE_ACTION_STAGE_SEPARATE;
+    output.deploy_drogue =
+        context.discrete_actuation.valid
+        && context.discrete_actuation.action
+            == FSW_DISCRETE_ACTION_DEPLOY_DROGUE;
+    output.deploy_main =
+        context.discrete_actuation.valid
+        && context.discrete_actuation.action
+            == FSW_DISCRETE_ACTION_DEPLOY_MAIN;
     output.abort = context.mode == FSW_MODE_ABORT;
     output.attitude_valid = context.attitude_valid;
     output.command_sequence = context.command_sequence;
@@ -2235,9 +2795,13 @@ void populate_output(const Context& context, FswOutput& output) {
     output.inhibit_flags = context.inhibit_flags;
     output.event_flags = context.event_flags;
     output.imu_usable_mask = context.imu_usable_mask;
+    output.magnetometer_usable_mask =
+        context.magnetometer_usable_mask;
     output.barometer_usable_mask = context.barometer_usable_mask;
     output.gnss_usable_mask = context.gnss_usable_mask;
     output.imu_rejected_mask = context.imu_rejected_mask;
+    output.magnetometer_rejected_mask =
+        context.magnetometer_rejected_mask;
     output.barometer_rejected_mask = context.barometer_rejected_mask;
     output.gnss_rejected_mask = context.gnss_rejected_mask;
     output.disagreement_flags = context.disagreement_flags;
@@ -2245,11 +2809,15 @@ void populate_output(const Context& context, FswOutput& output) {
     for (int index = 0; index < FSW_MAX_SENSOR_CHANNELS; ++index) {
         output.imu_health_flags[index] =
             context.imu_health[index].flags;
+        output.magnetometer_health_flags[index] =
+            context.magnetometer_health[index].flags;
         output.barometer_health_flags[index] =
             context.barometer_health[index].flags;
         output.gnss_health_flags[index] =
             context.gnss_health[index].flags;
         output.imu_age_s[index] = context.imu_health[index].age_s;
+        output.magnetometer_age_s[index] =
+            context.magnetometer_health[index].age_s;
         output.barometer_age_s[index] =
             context.barometer_health[index].age_s;
         output.gnss_age_s[index] = context.gnss_health[index].age_s;
@@ -2267,10 +2835,15 @@ void populate_output(const Context& context, FswOutput& output) {
         context.gnss_altitude_innovation;
     output.gnss_velocity_innovation_m_s =
         context.gnss_velocity_innovation;
+    const auto attitude = relative_attitude(context);
     for (int index = 0; index < 4; ++index) {
-        output.estimated_attitude_wxyz[index] = context.attitude[index];
+        output.estimated_attitude_wxyz[index] = attitude[index];
     }
     for (int index = 0; index < 3; ++index) {
+        output.estimated_position_ecef_m[index] =
+            context.position_ecef[index];
+        output.estimated_velocity_ecef_m_s[index] =
+            context.velocity_ecef[index];
         output.gyro_bias_rad_s[index] = context.gyro_bias[index];
         output.attitude_sigma_rad[index] = std::sqrt(
             std::max(context.attitude_variance[index], 0.0)
@@ -2346,10 +2919,17 @@ int32_t fsw_step(
         return FSW_STATUS_INVALID_INPUT;
     }
 
+    context.step_delta_s = context.time_initialized
+        ? sensor.time_s - context.last_time_s
+        : sensor.dt_s;
+    context.input_timing_mismatch = context.time_initialized
+        && std::abs(sensor.dt_s - context.step_delta_s)
+            > context.config.step_time_tolerance_s;
     context.event_flags = 0;
     context.changed_fault_flags = 0;
     context.stage1_ignite_request = false;
     context.stage2_ignite_request = false;
+    context.discrete_actuation = {};
     context.previous_mode = context.mode;
     const VotedSensors voted = vote_sensors(context, sensor);
     update_navigation(context, *input, voted);
@@ -2361,10 +2941,6 @@ int32_t fsw_step(
     context.time_initialized = true;
     context.last_time_s = sensor.time_s;
     populate_output(context, *output);
-    output->stage_separate =
-        context.mode == FSW_MODE_SEPARATION
-        && sensor.time_s >= context.config.stage1_burn_s
-            + context.config.separation_delay_s;
     calculate_controls(context, *input, *output);
     return FSW_STATUS_OK;
 }
@@ -2374,7 +2950,7 @@ void fsw_destroy(FswHandle handle) {
 }
 
 const char* fsw_version(void) {
-    return "fsw-core-0.4.0";
+    return "fsw-core-0.5.0";
 }
 
 }  // extern "C"

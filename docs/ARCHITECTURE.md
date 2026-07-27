@@ -26,11 +26,27 @@ Python bridge maps recorded sensor channels plus typed air-data, propulsion,
 recovery-feedback, command, and platform-timing fields, so recorded inputs can
 replace the simulator through `python -m astara replay`.
 
-The sensor suite accepts up to three timestamped IMU, barometer, and GNSS
-channels. The reference emulator writes all three channels. Flight Core votes
-fresh channels, debounces rejection and recovery, reports per-channel reason,
-age, usable/rejected masks, and disagreement flags, and falls back to the
-remaining source or inertial propagation when aiding is unavailable.
+The sensor suite accepts up to three timestamped accelerometer/gyro,
+magnetometer, barometer, and GNSS channels. Magnetometer health is independent
+of accelerometer/gyro health; disturbed magnetic data therefore does not remove
+a usable inertial channel. The reference emulator gives every virtual channel
+its own bias, noise stream, sample schedule, retained sample, timestamp, and
+fault state. Flight Core votes fresh channels, debounces rejection and
+recovery, reports per-channel reason, age, usable/rejected masks, and
+disagreement flags, and falls back to inertial propagation when aiding is
+unavailable. Rate checks use the last accepted sample, so a rejected outlier
+cannot poison the next channel baseline.
+
+Navigation is a minimal ECEF strapdown solution. The first accepted GNSS
+position establishes the radial altitude reference and the configured launch
+azimuth establishes the body-to-ECEF attitude. Voted body specific force is
+rotated into ECEF, then point-mass Earth gravity and rotating-Earth terms are
+applied before position and velocity integration. Gravity uses
+`mu = 3.986004418e14 m^3/s^2`, spherical radius `6378137 m`, and Earth rate
+`7.292115e-5 rad/s`, matching the Python twin. Altitude and vertical velocity
+are derived from ECEF radius and the local radial unit vector. GNSS vertical
+velocity is likewise derived inside Flight Core; simulator truth is not an FSW
+input.
 
 The generic C ABI uses `fsw_*`, `Fsw*`, and `FSW_*` names. ASTARA naming remains
 at the company workbench, schema, and requirement layers.
@@ -49,6 +65,14 @@ one-step request confirmed by propulsion feedback. Stage-two ignition remains
 automatic but is guarded by separation feedback, navigation, attitude,
 propulsion, timing, and uncertainty inhibits.
 
+Mission delays are relative to confirmed events, not absolute simulation time:
+stage-one burn begins at ignition confirmation, separation delay begins at
+burnout detection, stage-two ignition delay begins at separation confirmation,
+and stage-two burn begins at its ignition confirmation. Separation, drogue,
+and main outputs are fixed-size one-shot commands with monotonically increasing
+sequence identities. The actuator emulator consumes each identity once while
+Flight Core continues waiting for timestamped confirmation after the pulse.
+
 The replayable sensor contract is the migration boundary. A future transport
 may move Flight Core into another process without changing mission logic or
 recorded sensor semantics.
@@ -62,12 +86,25 @@ only for failures and the configured deterministic sample.
 
 - Scenario time is explicit and independent of wall-clock display pacing.
 - Flight Core receives `time_s` and `dt_s` on every step.
+- Navigation integrates an IMU sample only when its sample timestamp advances,
+  using that sample-time delta. Repeated or older timestamps do not propagate
+  attitude, position, or velocity.
+- A `dt_s`/timestamp-delta mismatch is processed using the timestamp delta and
+  raises `FSW_FAULT_INPUT_TIMING`; non-monotonic time remains rejected without
+  state mutation.
+- Air data, propulsion status, discrete feedback, and platform status use
+  separate configured freshness timeouts.
 - Flight Core allocates its context once during initialization.
 - ABI version/size mismatch and invalid or non-monotonic input are rejected
   before controller state changes; output validity is explicit and actuation
   remains zero.
+- The Python host measures native `fsw_step()` duration with a monotonic
+  high-resolution clock and supplies it on the following step. This is host
+  monitoring only, not hardware real-time qualification. Twin and replay runs
+  use explicit deterministic timing overrides.
 - Platform execution time, deadline misses, watchdog health, navigation
-  uncertainty, innovations, and fault lifecycle are observable outputs.
+  uncertainty, innovations, ECEF estimates, and fault lifecycle are observable
+  outputs.
 - UI telemetry and queues are bounded.
 
 ## Safety boundary
@@ -75,3 +112,42 @@ only for failures and the configured deterministic sample.
 No module exposes physical ignition, valve, pyrotechnic, GPIO, serial, or
 flight-termination control. Hardware integration requires a separate reviewed
 adapter and a later roadmap gate.
+
+## Current limitations
+
+- The ECEF estimator is a minimal complementary solution without covariance
+  cross-coupling, coning/sculling compensation, Earth ellipsoid, GNSS clock
+  modeling, or magnetometer attitude correction.
+- Guidance and control remain simple scheduled attitude targets with
+  proportional/derivative effort and basic aerodynamic blending.
+- There is no hardware abstraction layer or physical I/O implementation.
+- Host SIL results are simulation-only and unvalidated; they are not HIL,
+  real-time, flight-qualified, or certification evidence.
+
+## Proposed module extraction after v0.5
+
+`fsw.cpp` remains one translation unit for this change. A later refactor can
+move existing internal code, without changing the C ABI, in this order:
+
+1. `navigation.{h,cpp}` for quaternion helpers, ECEF propagation, and aiding.
+2. `sensor_voting.{h,cpp}` for channel evaluation, voting, and health state.
+3. `mission.{h,cpp}` for command handling, event timestamps, and recovery.
+4. `faults.{h,cpp}` for fault lifecycle, severity, and freshness checks.
+5. `control.{h,cpp}` for guidance interpolation and actuator effort.
+
+Each extraction should be mechanical and independently verified in Debug and
+Release; new interfaces or allocation are not prerequisites.
+
+## Verification
+
+```bash
+cmake -S flight_core -B flight_core/build-debug -DCMAKE_BUILD_TYPE=Debug
+cmake --build flight_core/build-debug --parallel
+ctest --test-dir flight_core/build-debug --output-on-failure
+
+cmake -S flight_core -B flight_core/build-release -DCMAKE_BUILD_TYPE=Release
+cmake --build flight_core/build-release --parallel
+ctest --test-dir flight_core/build-release --output-on-failure
+
+python -m unittest discover -s tests -v
+```

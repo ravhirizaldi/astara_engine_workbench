@@ -5,6 +5,7 @@ from __future__ import annotations
 import ctypes
 import math
 import subprocess
+import time
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -13,7 +14,7 @@ from .scenario import resolve_mission_events
 FSW_MAX_GUIDANCE_POINTS = 32
 FSW_MAX_SENSOR_CHANNELS = 3
 FSW_FAULT_COUNT = 21
-FSW_ABI_VERSION = 0x00040000
+FSW_ABI_VERSION = 0x00050000
 FSW_BODY_INTEGRATED = 0
 FSW_BODY_CORE = 1
 FSW_BODY_UPPER = 2
@@ -23,6 +24,9 @@ FSW_COMMAND_DISARM = 2
 FSW_COMMAND_LAUNCH = 3
 FSW_COMMAND_ABORT = 4
 FSW_COMMAND_CLEAR_FAULTS = 5
+FSW_DISCRETE_ACTION_STAGE_SEPARATE = 1
+FSW_DISCRETE_ACTION_DEPLOY_DROGUE = 2
+FSW_DISCRETE_ACTION_DEPLOY_MAIN = 3
 
 
 class GuidancePoint(ctypes.Structure):
@@ -49,6 +53,10 @@ class FswConfig(ctypes.Structure):
         ("imu_timeout_s", ctypes.c_double),
         ("barometer_timeout_s", ctypes.c_double),
         ("gnss_timeout_s", ctypes.c_double),
+        ("air_data_timeout_s", ctypes.c_double),
+        ("propulsion_status_timeout_s", ctypes.c_double),
+        ("discrete_feedback_timeout_s", ctypes.c_double),
+        ("platform_status_timeout_s", ctypes.c_double),
         ("acceleration_disagreement_m_s2", ctypes.c_double),
         ("gyro_disagreement_rad_s", ctypes.c_double),
         ("magnetic_disagreement", ctypes.c_double),
@@ -72,6 +80,7 @@ class FswConfig(ctypes.Structure):
         ("fault_recovery_persistence_s", ctypes.c_double),
         ("min_step_s", ctypes.c_double),
         ("max_step_s", ctypes.c_double),
+        ("step_time_tolerance_s", ctypes.c_double),
         ("loop_deadline_s", ctypes.c_double),
         ("overrun_abort_count", ctypes.c_uint32),
         ("propulsion_abort_health_percent", ctypes.c_double),
@@ -95,6 +104,7 @@ class FswConfig(ctypes.Structure):
         ("max_altitude_sigma_m", ctypes.c_double),
         ("max_velocity_sigma_m_s", ctypes.c_double),
         ("max_attitude_sigma_rad", ctypes.c_double),
+        ("launch_azimuth_rad", ctypes.c_double),
         ("guidance_count", ctypes.c_uint32),
         ("guidance", GuidancePoint * FSW_MAX_GUIDANCE_POINTS),
         ("body_role", ctypes.c_int32),
@@ -123,6 +133,11 @@ class SensorFrame(ctypes.Structure):
         ("propulsion_running", ctypes.c_int32),
         ("drogue_deployed", ctypes.c_int32),
         ("main_deployed", ctypes.c_int32),
+        ("imu_sample_time_s", ctypes.c_double),
+        ("magnetometer_sample_time_s", ctypes.c_double),
+        ("accel_valid", ctypes.c_int32),
+        ("gyro_valid", ctypes.c_int32),
+        ("magnetometer_valid", ctypes.c_int32),
     ]
 
 
@@ -130,6 +145,14 @@ class FswImuSample(ctypes.Structure):
     _fields_ = [
         ("acceleration_body_m_s2", ctypes.c_double * 3),
         ("gyro_body_rad_s", ctypes.c_double * 3),
+        ("sample_time_s", ctypes.c_double),
+        ("accel_valid", ctypes.c_int32),
+        ("gyro_valid", ctypes.c_int32),
+    ]
+
+
+class FswMagnetometerSample(ctypes.Structure):
+    _fields_ = [
         ("magnetic_body", ctypes.c_double * 3),
         ("sample_time_s", ctypes.c_double),
         ("valid", ctypes.c_int32),
@@ -148,7 +171,6 @@ class FswGnssSample(ctypes.Structure):
     _fields_ = [
         ("gnss_position_ecef_m", ctypes.c_double * 3),
         ("gnss_velocity_ecef_m_s", ctypes.c_double * 3),
-        ("vertical_velocity_m_s", ctypes.c_double),
         ("sample_time_s", ctypes.c_double),
         ("valid", ctypes.c_int32),
     ]
@@ -159,9 +181,14 @@ class FswSensorSuite(ctypes.Structure):
         ("time_s", ctypes.c_double),
         ("dt_s", ctypes.c_double),
         ("imu_count", ctypes.c_uint32),
+        ("magnetometer_count", ctypes.c_uint32),
         ("barometer_count", ctypes.c_uint32),
         ("gnss_count", ctypes.c_uint32),
         ("imus", FswImuSample * FSW_MAX_SENSOR_CHANNELS),
+        (
+            "magnetometers",
+            FswMagnetometerSample * FSW_MAX_SENSOR_CHANNELS,
+        ),
         ("barometers", FswBarometerSample * FSW_MAX_SENSOR_CHANNELS),
         ("gnss", FswGnssSample * FSW_MAX_SENSOR_CHANNELS),
     ]
@@ -219,6 +246,15 @@ class FswCommand(ctypes.Structure):
     ]
 
 
+class FswDiscreteActuationCommand(ctypes.Structure):
+    _fields_ = [
+        ("sequence", ctypes.c_uint64),
+        ("action", ctypes.c_int32),
+        ("pulse_duration_s", ctypes.c_double),
+        ("valid", ctypes.c_int32),
+    ]
+
+
 class FswInput(ctypes.Structure):
     _fields_ = [
         ("abi_version", ctypes.c_uint32),
@@ -252,22 +288,32 @@ class FswOutput(ctypes.Structure):
         ("command_result", ctypes.c_int32),
         ("inhibit_flags", ctypes.c_uint32),
         ("event_flags", ctypes.c_uint32),
+        ("discrete_actuation", FswDiscreteActuationCommand),
         ("imu_usable_mask", ctypes.c_uint32),
+        ("magnetometer_usable_mask", ctypes.c_uint32),
         ("barometer_usable_mask", ctypes.c_uint32),
         ("gnss_usable_mask", ctypes.c_uint32),
         ("imu_rejected_mask", ctypes.c_uint32),
+        ("magnetometer_rejected_mask", ctypes.c_uint32),
         ("barometer_rejected_mask", ctypes.c_uint32),
         ("gnss_rejected_mask", ctypes.c_uint32),
         ("disagreement_flags", ctypes.c_uint32),
         ("sensor_status_flags", ctypes.c_uint32),
         ("imu_health_flags", ctypes.c_uint32 * FSW_MAX_SENSOR_CHANNELS),
+        (
+            "magnetometer_health_flags",
+            ctypes.c_uint32 * FSW_MAX_SENSOR_CHANNELS,
+        ),
         ("barometer_health_flags", ctypes.c_uint32 * FSW_MAX_SENSOR_CHANNELS),
         ("gnss_health_flags", ctypes.c_uint32 * FSW_MAX_SENSOR_CHANNELS),
         ("imu_age_s", ctypes.c_double * FSW_MAX_SENSOR_CHANNELS),
+        ("magnetometer_age_s", ctypes.c_double * FSW_MAX_SENSOR_CHANNELS),
         ("barometer_age_s", ctypes.c_double * FSW_MAX_SENSOR_CHANNELS),
         ("gnss_age_s", ctypes.c_double * FSW_MAX_SENSOR_CHANNELS),
         ("estimated_altitude_m", ctypes.c_double),
         ("estimated_vertical_velocity_m_s", ctypes.c_double),
+        ("estimated_position_ecef_m", ctypes.c_double * 3),
+        ("estimated_velocity_ecef_m_s", ctypes.c_double * 3),
         ("estimated_attitude_wxyz", ctypes.c_double * 4),
         ("altitude_sigma_m", ctypes.c_double),
         ("vertical_velocity_sigma_m_s", ctypes.c_double),
@@ -367,6 +413,11 @@ SENSOR_CSV_FIELDS = (
     "stage_separated",
     "barometer_sample_time_s",
     "gnss_sample_time_s",
+    "imu_sample_time_s",
+    "magnetometer_sample_time_s",
+    "accel_valid",
+    "gyro_valid",
+    "magnetometer_valid",
     "propulsion_ready",
     "propulsion_running",
     "drogue_deployed",
@@ -406,6 +457,11 @@ def sensor_frame_to_row(
         "stage_separated": frame.stage_separated,
         "barometer_sample_time_s": frame.barometer_sample_time_s,
         "gnss_sample_time_s": frame.gnss_sample_time_s,
+        "imu_sample_time_s": frame.imu_sample_time_s,
+        "magnetometer_sample_time_s": frame.magnetometer_sample_time_s,
+        "accel_valid": frame.accel_valid,
+        "gyro_valid": frame.gyro_valid,
+        "magnetometer_valid": frame.magnetometer_valid,
         "propulsion_ready": frame.propulsion_ready,
         "propulsion_running": frame.propulsion_running,
         "drogue_deployed": frame.drogue_deployed,
@@ -456,6 +512,11 @@ def sensor_frame_from_row(row: Mapping[str, str]) -> SensorFrame:
         int(row.get("propulsion_running", int(float(row["time_s"]) > 0.0))),
         int(row.get("drogue_deployed", "0")),
         int(row.get("main_deployed", "0")),
+        float(row.get("imu_sample_time_s") or row["time_s"]),
+        float(row.get("magnetometer_sample_time_s") or row["time_s"]),
+        int(row.get("accel_valid", "1")),
+        int(row.get("gyro_valid", "1")),
+        int(row.get("magnetometer_valid", "1")),
     )
 
 
@@ -472,6 +533,9 @@ def sensor_suite_from_frames(
         )
     first = frames[0]
     imus = (FswImuSample * FSW_MAX_SENSOR_CHANNELS)()
+    magnetometers = (
+        FswMagnetometerSample * FSW_MAX_SENSOR_CHANNELS
+    )()
     barometers = (FswBarometerSample * FSW_MAX_SENSOR_CHANNELS)()
     gnss = (FswGnssSample * FSW_MAX_SENSOR_CHANNELS)()
     for index, frame in enumerate(frames):
@@ -483,9 +547,14 @@ def sensor_suite_from_frames(
         imus[index] = FswImuSample(
             frame.acceleration_body_m_s2,
             frame.gyro_body_rad_s,
+            frame.imu_sample_time_s,
+            frame.accel_valid,
+            frame.gyro_valid,
+        )
+        magnetometers[index] = FswMagnetometerSample(
             frame.magnetic_body,
-            frame.time_s,
-            1,
+            frame.magnetometer_sample_time_s,
+            frame.magnetometer_valid,
         )
         barometers[index] = FswBarometerSample(
             frame.barometric_altitude_m,
@@ -495,7 +564,6 @@ def sensor_suite_from_frames(
         gnss[index] = FswGnssSample(
             frame.gnss_position_ecef_m,
             frame.gnss_velocity_ecef_m_s,
-            frame.vertical_velocity_m_s,
             frame.gnss_sample_time_s,
             frame.gnss_valid,
         )
@@ -505,7 +573,9 @@ def sensor_suite_from_frames(
         len(frames),
         len(frames),
         len(frames),
+        len(frames),
         imus,
+        magnetometers,
         barometers,
         gnss,
     )
@@ -609,6 +679,10 @@ class FlightCore:
         auto_commands: bool = True,
     ):
         library = ctypes.CDLL(str(library_path or build_library()))
+        library.fsw_abi_version.argtypes = []
+        library.fsw_abi_version.restype = ctypes.c_uint32
+        if library.fsw_abi_version() != FSW_ABI_VERSION:
+            raise RuntimeError("flight-core ABI version mismatch")
         library.fsw_create.argtypes = [ctypes.POINTER(FswConfig)]
         library.fsw_create.restype = ctypes.c_void_p
         library.fsw_reset.argtypes = [ctypes.c_void_p]
@@ -676,6 +750,27 @@ class FlightCore:
             sensors.get(
                 "gnss_timeout_s",
                 max(3.0 / float(sensors["gnss_rate_hz"]), 0.25),
+            )
+        )
+        config.air_data_timeout_s = float(
+            sensors.get("air_data_timeout_s", config.imu_timeout_s)
+        )
+        config.propulsion_status_timeout_s = float(
+            sensors.get(
+                "propulsion_status_timeout_s",
+                config.imu_timeout_s,
+            )
+        )
+        config.discrete_feedback_timeout_s = float(
+            sensors.get(
+                "discrete_feedback_timeout_s",
+                config.imu_timeout_s,
+            )
+        )
+        config.platform_status_timeout_s = float(
+            sensors.get(
+                "platform_status_timeout_s",
+                config.imu_timeout_s,
             )
         )
         config.acceleration_disagreement_m_s2 = float(
@@ -746,6 +841,9 @@ class FlightCore:
         config.fault_recovery_persistence_s = 0.25
         config.min_step_s = 1e-6
         config.max_step_s = 0.1
+        config.step_time_tolerance_s = float(
+            sensors.get("step_time_tolerance_s", 1e-6)
+        )
         config.loop_deadline_s = 2.0 / float(sensors["imu_rate_hz"])
         config.overrun_abort_count = 3
         config.propulsion_abort_health_percent = 20.0
@@ -769,6 +867,9 @@ class FlightCore:
         config.max_altitude_sigma_m = 500.0
         config.max_velocity_sigma_m_s = 200.0
         config.max_attitude_sigma_rad = 1.0
+        config.launch_azimuth_rad = math.radians(
+            float(schedule[0]["azimuth_deg"])
+        )
         config.guidance_count = len(schedule)
         config.guidance = guidance
         config.body_role = body_role
@@ -802,6 +903,8 @@ class FlightCore:
         ]
         self._scheduled_command_index = 0
         self._next_command_sequence = 1
+        self._previous_execution_time_s = 0.0
+        self._loop_deadline_s = config.loop_deadline_s
 
     def step(
         self,
@@ -812,8 +915,8 @@ class FlightCore:
         propulsion_running: bool | None = None,
         drogue_deployed: bool | None = None,
         main_deployed: bool | None = None,
-        previous_execution_time_s: float = 0.0,
-        deadline_missed: bool = False,
+        previous_execution_time_s: float | None = None,
+        deadline_missed: bool | None = None,
         watchdog_healthy: bool = True,
         sensor_channels: Sequence[SensorFrame] | None = None,
     ) -> FswOutput:
@@ -831,6 +934,11 @@ class FlightCore:
         if command_type != FSW_COMMAND_NONE:
             command_sequence = self._next_command_sequence
             self._next_command_sequence += 1
+        reported_execution_time_s = (
+            self._previous_execution_time_s
+            if previous_execution_time_s is None
+            else previous_execution_time_s
+        )
         input_frame = fsw_input_from_frame(
             sensor,
             command_type=command_type,
@@ -839,17 +947,25 @@ class FlightCore:
             propulsion_running=propulsion_running,
             drogue_deployed=drogue_deployed,
             main_deployed=main_deployed,
-            previous_execution_time_s=previous_execution_time_s,
-            deadline_missed=deadline_missed,
+            previous_execution_time_s=reported_execution_time_s,
+            deadline_missed=(
+                reported_execution_time_s > self._loop_deadline_s
+                if deadline_missed is None
+                else deadline_missed
+            ),
             watchdog_healthy=watchdog_healthy,
         )
         if sensor_channels is not None:
             input_frame.sensors = sensor_suite_from_frames(
                 (sensor, *sensor_channels)
             )
+        started_ns = time.perf_counter_ns()
         status = self._library.fsw_step(
             self._handle, ctypes.byref(input_frame), ctypes.byref(output)
         )
+        self._previous_execution_time_s = (
+            time.perf_counter_ns() - started_ns
+        ) * 1e-9
         if status != 0 or not output.output_valid:
             raise RuntimeError(f"fsw_step failed with status {status}")
         return output

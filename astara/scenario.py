@@ -509,8 +509,14 @@ def validate_scenario(scenario: dict[str, Any]) -> None:
     ):
         raise ValueError("sensors.channel_count must be an integer from 1 to 3")
     for name in (
+        "imu_timeout_s",
         "barometer_timeout_s",
         "gnss_timeout_s",
+        "air_data_timeout_s",
+        "propulsion_status_timeout_s",
+        "discrete_feedback_timeout_s",
+        "platform_status_timeout_s",
+        "step_time_tolerance_s",
         "altitude_filter_tau_s",
         "velocity_filter_tau_s",
     ):

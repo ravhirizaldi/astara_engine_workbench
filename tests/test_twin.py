@@ -10,10 +10,150 @@ import numpy as np
 
 from astara.flight_core import FswOutput
 from astara.scenario import default_scenario, load_scenario, scenario_hash
-from astara.twin import Body, _actuator_commands, run_simulation
+from astara.twin import (
+    Body,
+    _actuator_commands,
+    _apply_sensor_faults,
+    _sensor_frame,
+    run_simulation,
+)
 
 
 class TwinTests(unittest.TestCase):
+    def test_three_sensor_channels_are_independent_and_faults_hold(self) -> None:
+        scenario = default_scenario()
+        stage = scenario["vehicle"]["stages"][0]
+        launch_position = np.array([6_378_137.0, 0.0, 0.0])
+        body = Body(
+            name="integrated_stack",
+            stage_index=0,
+            stage=stage,
+            position_ecef_m=launch_position.copy(),
+            velocity_ecef_m_s=np.zeros(3),
+            attitude_wxyz=np.array([1.0, 0.0, 0.0, 0.0]),
+            body_rates_rad_s=np.zeros(3),
+            fuel_kg=stage["fuel_mass_kg"],
+            oxidizer_kg=stage["oxidizer_mass_kg"],
+        )
+        body.last_specific_force_body_m_s2[:] = (9.764, 0.0, 0.0)
+        rng = np.random.default_rng(123)
+        first = [
+            _sensor_frame(
+                body,
+                scenario,
+                rng,
+                0.0,
+                0.005,
+                launch_position,
+                False,
+                channel,
+            )
+            for channel in range(3)
+        ]
+        self.assertEqual(len(body.sensor_channels), 3)
+        self.assertFalse(
+            np.array_equal(
+                first[0].acceleration_body_m_s2,
+                first[1].acceleration_body_m_s2,
+            )
+        )
+        body.sensor_channels[1].next_imu_sample_s = 0.02
+        body.last_specific_force_body_m_s2[0] = 15.0
+        second = [
+            _sensor_frame(
+                body,
+                scenario,
+                rng,
+                0.005,
+                0.005,
+                launch_position,
+                False,
+                channel,
+            )
+            for channel in range(3)
+        ]
+        self.assertEqual(second[1].imu_sample_time_s, 0.0)
+        self.assertEqual(second[0].imu_sample_time_s, 0.005)
+
+        scenario["faults"] = [
+            {
+                "body": "integrated_stack",
+                "sensor": "imu",
+                "channel": 0,
+                "type": "freeze",
+                "start_s": 0.01,
+                "duration_s": 0.01,
+            },
+            {
+                "body": "integrated_stack",
+                "sensor": "imu",
+                "channel": 1,
+                "type": "dropout",
+                "start_s": 0.01,
+                "duration_s": 0.01,
+            },
+            {
+                "body": "integrated_stack",
+                "sensor": "imu",
+                "channel": 1,
+                "type": "stuck-valid",
+                "start_s": 0.01,
+                "duration_s": 0.01,
+            },
+            {
+                "body": "integrated_stack",
+                "sensor": "imu",
+                "channel": 2,
+                "type": "stale",
+                "start_s": 0.01,
+                "duration_s": 0.01,
+            },
+        ]
+        before = [
+            state.acceleration_body_m_s2.copy()
+            for state in body.sensor_channels
+        ]
+        faulted = [
+            _sensor_frame(
+                body,
+                scenario,
+                rng,
+                0.01,
+                0.005,
+                launch_position,
+                False,
+                channel,
+            )
+            for channel in range(3)
+        ]
+        self.assertTrue(
+            np.array_equal(faulted[0].acceleration_body_m_s2, before[0])
+        )
+        self.assertEqual(faulted[0].imu_sample_time_s, 0.01)
+        self.assertTrue(
+            np.array_equal(faulted[1].acceleration_body_m_s2, before[1])
+        )
+        self.assertEqual(faulted[1].imu_sample_time_s, 0.0)
+        self.assertEqual(faulted[1].accel_valid, 1)
+        self.assertTrue(
+            np.array_equal(faulted[2].acceleration_body_m_s2, before[2])
+        )
+        self.assertEqual(faulted[2].imu_sample_time_s, 0.005)
+
+        value, timestamp, valid = _apply_sensor_faults(
+            np.array([4.0]),
+            np.array([1.0]),
+            2.0,
+            1.0,
+            [
+                {"type": "scale_error", "value": 2.0},
+                {"type": "bias", "value": 3.0},
+            ],
+        )
+        self.assertEqual(value[0], 11.0)
+        self.assertEqual(timestamp, 2.0)
+        self.assertEqual(valid, 1)
+
     def test_fixed_fins_do_not_accept_fsw_commands(self) -> None:
         scenario = default_scenario()
         stage = scenario["vehicle"]["stages"][0]

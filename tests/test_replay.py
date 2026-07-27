@@ -47,6 +47,11 @@ class ReplayTests(unittest.TestCase):
                         int(index > 0),
                         0,
                         0,
+                        index * 0.005,
+                        index * 0.005,
+                        1,
+                        1,
+                        1,
                     )
                     writer.writerow(sensor_frame_to_row("integrated_stack", frame))
             with (Path(directory) / "commands.csv").open(
@@ -103,11 +108,24 @@ class ReplayTests(unittest.TestCase):
             1.4,
         )
         row = sensor_frame_to_row("integrated_stack", frame)
-        row.pop("barometer_sample_time_s")
-        row.pop("gnss_sample_time_s")
+        for field in (
+            "barometer_sample_time_s",
+            "gnss_sample_time_s",
+            "imu_sample_time_s",
+            "magnetometer_sample_time_s",
+            "accel_valid",
+            "gyro_valid",
+            "magnetometer_valid",
+        ):
+            row.pop(field)
         restored = sensor_frame_from_row(row)
         self.assertEqual(restored.barometer_sample_time_s, 1.5)
         self.assertEqual(restored.gnss_sample_time_s, 1.5)
+        self.assertEqual(restored.imu_sample_time_s, 1.5)
+        self.assertEqual(restored.magnetometer_sample_time_s, 1.5)
+        self.assertEqual(restored.accel_valid, 1)
+        self.assertEqual(restored.gyro_valid, 1)
+        self.assertEqual(restored.magnetometer_valid, 1)
 
 
 if __name__ == "__main__":

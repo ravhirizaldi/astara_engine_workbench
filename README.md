@@ -118,11 +118,14 @@ python3 -m astara replay runs/<run>/sensors.csv.gz
 ```
 
 The controller consumes the complete mission attitude schedule with piecewise
-pitch and launch-relative azimuth interpolation. Its v0.4 ABI accepts typed
+pitch and launch-relative azimuth interpolation. Its v0.5 ABI accepts typed
 sensor, air-data, propulsion, discrete-feedback, command, and platform-timing
-inputs. It votes up to three timestamped IMU, barometer, and GNSS channels,
+inputs. It votes up to three independently timestamped accelerometer/gyro,
+magnetometer, barometer, and GNSS channels, propagates a minimal ECEF
+navigation state, emits sequence-identified one-shot recovery commands,
 performs deterministic rejection/recovery, and reports channel health,
-uncertainty, command inhibits, timing, and active/latched faults. Existing
+uncertainty, ECEF estimates, command inhibits, timing, and active/latched
+faults. Existing
 single-sensor logs remain replayable through the Python bridge. Recorded
 commands replay from `commands.csv`; older runs use the legacy deterministic
 launch schedule. The upper stage keeps the integrated-stack controller state
@@ -130,8 +133,8 @@ through separation.
 
 Current controller limitations remain explicit:
 
-- attitude estimation remains launch-frame gyro integration without a calibrated
-  absolute AHRS correction;
+- attitude estimation remains gyro integration without calibrated absolute
+  magnetometer correction;
 - uncertainty is a bounded diagonal estimate, not a validated navigation filter;
 - the C ABI is loaded in-process with `ctypes`, without transport fault testing;
 - timing/memory budgets, cross-platform baselines, HIL evidence, and controller
@@ -172,7 +175,9 @@ self-contained `scenario.json` and `vehicle_definition.json` snapshots. Inline
   separation impulse
 - independent core-stage and upper-stage state after separation
 - drogue/main recovery and landing detection for both stages
-- configurable IMU, barometer, and GNSS noise plus dropout/bias faults
+- one to three virtual channels with independent bias, noise, schedule, retained
+  sample, timestamp, and composable dropout/stale/freeze/stuck-valid/bias/scale
+  faults
 - 200 Hz C++ mission logic, estimation, reference guidance, TVC, movable-fin
   control allocation, recovery commands, and fault flags
 
