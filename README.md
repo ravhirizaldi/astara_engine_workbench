@@ -75,10 +75,18 @@ Run the reference mission without the GUI:
 ```bash
 python3 -m astara validate
 python3 -m astara build-fsw
-python3 -m astara simulate scenarios/anthariksa_reference_mission.json --seed 1
+python3 -m astara simulate --seed 1 --no-report
+python3 -m astara simulate --seed 1 --no-report --progress
+python3 -m astara simulate --seed 1 --no-report --quiet
+python3 -m astara simulate --seed 1 --no-report --progress-interval 0.5
 python3 -m astara analyze scenarios/anthariksa_reference_mission.json \
   --samples 20 --seed 1
 ```
+
+Simulation progress appears automatically in an interactive terminal. Use
+`--progress` to force newline-delimited progress when redirecting output, or
+`--quiet` to suppress it. Progress and mission events use stderr; stdout remains
+the run directory followed by the JSON manifest.
 
 Each mission creates a unique `runs/` directory containing:
 

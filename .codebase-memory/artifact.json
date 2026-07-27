@@ -1,11 +1,11 @@
 {
     "schema_version": 2,
-    "commit": "b66312c1b630ce6368239cd60be5802a38017039",
-    "indexed_at": "2026-07-27T08:12:20Z",
+    "commit": "d8eeb248d33042727710af9adb946f60f5739e56",
+    "indexed_at": "2026-07-27T08:37:43Z",
     "project": "home-ravhi-c-1_engine",
-    "nodes": 1006,
-    "edges": 3910,
-    "original_size": 5439488,
-    "compressed_size": 969225,
+    "nodes": 0,
+    "edges": 0,
+    "original_size": 102400,
+    "compressed_size": 1468,
     "compression_level": 3
 }
