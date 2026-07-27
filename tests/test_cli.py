@@ -170,6 +170,27 @@ class CliProgressTests(unittest.TestCase):
         self.assertIsNotNone(run.call_args.kwargs["on_sample"])
         self.assertIn("\r\033[2K", stderr.getvalue())
 
+    def test_timing_mode_options_reach_simulation(self) -> None:
+        _stdout, _stderr, run = self._run_cli(
+            [
+                "--timing-mode",
+                "injected",
+                "--injected-execution-time",
+                "0.02",
+            ]
+        )
+
+        self.assertEqual(run.call_args.kwargs["timing_mode"], "injected")
+        self.assertEqual(
+            run.call_args.kwargs["injected_execution_time_s"],
+            0.02,
+        )
+
+        stderr = _Stream()
+        with patch("sys.stderr", stderr), self.assertRaises(SystemExit):
+            main(["simulate", "--timing-mode", "injected"])
+        self.assertIn("--injected-execution-time is required", stderr.getvalue())
+
     def test_nonpositive_progress_interval_is_rejected(self) -> None:
         stderr = _Stream()
         with patch("sys.stderr", stderr), self.assertRaises(SystemExit):

@@ -88,6 +88,20 @@ Simulation progress appears automatically in an interactive terminal. Use
 `--quiet` to suppress it. Progress and mission events use stderr; stdout remains
 the run directory followed by the JSON manifest.
 
+FSW host timing is deterministic by default. Use measured timing for profiling,
+or inject a repeatable duration to test deadline faults:
+
+```bash
+python3 -m astara simulate --no-report --timing-mode measured
+python3 -m astara simulate --no-report --timing-mode injected \
+  --injected-execution-time 0.02
+```
+
+Measured timing depends on host load and can change timing faults or mission
+state. Injected timing remains repeatable. Replay and analysis runs remain
+deterministic. The selected mode is recorded in `manifest.json`; reported
+durations are written to `truth.csv` and `fsw.csv`.
+
 Each mission creates a unique `runs/` directory containing:
 
 - `scenario.json` and a SHA-256 scenario identity

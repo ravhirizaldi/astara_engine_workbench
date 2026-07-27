@@ -5,6 +5,7 @@ import math
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
@@ -245,6 +246,71 @@ class TwinTests(unittest.TestCase):
         self.assertTrue(
             any(event["event"] == "simulation_cancelled" for event in result.events)
         )
+
+    def test_fsw_timing_modes(self) -> None:
+        scenario = default_scenario()
+        scenario["simulation"].update(
+            {"max_time_s": 0.02, "output_rate_hz": 200.0}
+        )
+
+        deterministic = run_simulation(
+            scenario, create_report=False, persist=False
+        )
+        timer_ns = iter(range(0, 1_000_000_000, 20_000_000))
+        with mock.patch(
+            "astara.flight_core.time.perf_counter_ns",
+            side_effect=lambda: next(timer_ns),
+        ):
+            measured = run_simulation(
+                scenario,
+                create_report=False,
+                persist=False,
+                timing_mode="measured",
+            )
+        injected = run_simulation(
+            scenario,
+            create_report=False,
+            persist=False,
+            timing_mode="injected",
+            injected_execution_time_s=0.02,
+        )
+
+        self.assertEqual(deterministic.manifest["fsw_timing"]["mode"], "deterministic")
+        self.assertTrue(
+            all(
+                row["previous_execution_time_s"] == 0.0
+                for row in deterministic.fsw_telemetry
+            )
+        )
+        self.assertTrue(
+            any(
+                row["previous_execution_time_s"] > 0.01
+                for row in measured.fsw_telemetry
+            )
+        )
+        self.assertTrue(
+            all(
+                row["previous_execution_time_s"] == 0.02
+                for row in injected.fsw_telemetry
+            )
+        )
+        self.assertGreater(
+            max(row["consecutive_overruns"] for row in injected.fsw_telemetry),
+            0,
+        )
+        self.assertTrue(
+            all(
+                "DEADLINE_OVERRUN" in row["faults"]
+                for row in injected.fsw_telemetry
+            )
+        )
+        with self.assertRaisesRegex(ValueError, "requires"):
+            run_simulation(
+                scenario,
+                create_report=False,
+                persist=False,
+                timing_mode="injected",
+            )
 
     def test_short_two_stage_run_is_finite_and_reproducible(self) -> None:
         scenario = default_scenario()

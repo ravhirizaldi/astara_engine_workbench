@@ -100,8 +100,9 @@ only for failures and the configured deterministic sample.
   remains zero.
 - The Python host measures native `fsw_step()` duration with a monotonic
   high-resolution clock and supplies it on the following step. This is host
-  monitoring only, not hardware real-time qualification. Twin and replay runs
-  use explicit deterministic timing overrides.
+  monitoring only, not hardware real-time qualification. Twin runs default to
+  a deterministic zero-duration override, with explicit measured profiling and
+  repeatable injected-duration fault-test modes. Replay remains deterministic.
 - Platform execution time, deadline misses, watchdog health, navigation
   uncertainty, innovations, ECEF estimates, and fault lifecycle are observable
   outputs.

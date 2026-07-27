@@ -14,7 +14,7 @@ from .analysis import run_credibility_analysis
 from .flight_core import build_library
 from .replay import replay_fsw
 from .scenario import default_scenario_path, load_scenario, validate_scenario
-from .twin import run_simulation
+from .twin import FSW_TIMING_MODES, run_simulation
 
 
 class SimulationProgressReporter:
@@ -213,6 +213,13 @@ def _positive_float(value: str) -> float:
     return number
 
 
+def _nonnegative_float(value: str) -> float:
+    number = float(value)
+    if number < 0:
+        raise argparse.ArgumentTypeError("must be nonnegative")
+    return number
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m astara")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -227,6 +234,17 @@ def _parser() -> argparse.ArgumentParser:
     simulate.add_argument("--progress", action="store_true")
     simulate.add_argument("--progress-interval", type=_positive_float, default=1.0)
     simulate.add_argument("--quiet", action="store_true")
+    simulate.add_argument(
+        "--timing-mode",
+        choices=FSW_TIMING_MODES,
+        default="deterministic",
+        help="FSW timing source (default: deterministic)",
+    )
+    simulate.add_argument(
+        "--injected-execution-time",
+        type=_nonnegative_float,
+        metavar="SECONDS",
+    )
 
     validate = commands.add_parser("validate", help="validate a scenario")
     validate.add_argument(
@@ -259,7 +277,8 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    arguments = _parser().parse_args(argv)
+    parser = _parser()
+    arguments = parser.parse_args(argv)
     if arguments.command == "build-fsw":
         print(build_library())
         return 0
@@ -283,6 +302,13 @@ def main(argv: list[str] | None = None) -> int:
         print(output_dir)
         print((output_dir / "summary.json").read_text(encoding="utf-8"))
         return 0
+    if (
+        arguments.timing_mode == "injected"
+    ) != (arguments.injected_execution_time is not None):
+        parser.error(
+            "--injected-execution-time is required only with "
+            "--timing-mode injected"
+        )
     show_progress = not arguments.quiet and (
         arguments.progress or sys.stdout.isatty() or sys.stderr.isatty()
     )
@@ -303,6 +329,8 @@ def main(argv: list[str] | None = None) -> int:
             output_root=Path(arguments.output),
             create_report=not arguments.no_report,
             on_sample=reporter.update if reporter else None,
+            timing_mode=arguments.timing_mode,
+            injected_execution_time_s=arguments.injected_execution_time,
         )
     except KeyboardInterrupt:
         if reporter:

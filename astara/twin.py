@@ -51,6 +51,8 @@ from .math3d import (
 )
 from .scenario import evidence_documents, model_source_hash, scenario_hash, validate_scenario
 
+FSW_TIMING_MODES = ("deterministic", "measured", "injected")
+
 
 @dataclass
 class SensorChannelState:
@@ -572,8 +574,15 @@ def _run_fsw_substeps(
     on_sensor: Callable[
         [str, list[SensorFrame], FswOutput], None
     ] | None = None,
+    timing_mode: str = "deterministic",
+    injected_execution_time_s: float | None = None,
 ) -> FswOutput:
     fsw_step_s = 1.0 / float(scenario["sensors"]["imu_rate_hz"])
+    timing_override_s = (
+        None
+        if timing_mode == "measured"
+        else injected_execution_time_s if timing_mode == "injected" else 0.0
+    )
     output = current_output
     while body.next_fsw_sample_s <= time_s + 1e-12:
         channel_count = int(scenario["sensors"].get("channel_count", 1))
@@ -603,8 +612,8 @@ def _run_fsw_substeps(
             propulsion_running=propulsion_running,
             drogue_deployed=body.drogue_deployed,
             main_deployed=body.main_deployed,
-            previous_execution_time_s=0.0,
-            deadline_missed=False,
+            previous_execution_time_s=timing_override_s,
+            deadline_missed=False if timing_mode == "deterministic" else None,
             sensor_channels=frames[1:],
         )
         if on_sensor:
@@ -1086,6 +1095,7 @@ def _telemetry_row(
         "fsw_active_fault_flags": int(output.active_fault_flags),
         "fsw_latched_fault_flags": int(output.latched_fault_flags),
         "fsw_highest_fault_severity": int(output.highest_fault_severity),
+        "fsw_previous_execution_time_s": output.previous_execution_time_s,
         "fsw_altitude_sigma_m": output.altitude_sigma_m,
         "fsw_vertical_velocity_sigma_m_s": output.vertical_velocity_sigma_m_s,
         "fsw_command_sequence": int(output.command_sequence),
@@ -1125,9 +1135,24 @@ def run_simulation(
     ]
     | None = None,
     should_cancel: Callable[[], bool] | None = None,
+    timing_mode: str = "deterministic",
+    injected_execution_time_s: float | None = None,
 ) -> RunResult:
     if summary_only and persist:
         raise ValueError("summary_only cannot persist telemetry")
+    if timing_mode not in FSW_TIMING_MODES:
+        raise ValueError(f"timing_mode must be one of {FSW_TIMING_MODES}")
+    if timing_mode == "injected":
+        if (
+            injected_execution_time_s is None
+            or not math.isfinite(injected_execution_time_s)
+            or injected_execution_time_s < 0.0
+        ):
+            raise ValueError(
+                "injected timing requires a finite, nonnegative execution time"
+            )
+    elif injected_execution_time_s is not None:
+        raise ValueError("injected execution time requires timing_mode='injected'")
     validate_scenario(scenario)
     if seed is None:
         seed = int(scenario.get("simulation", {}).get("seed", 1))
@@ -1271,6 +1296,8 @@ def run_simulation(
                     separated,
                     outputs[body.name],
                     record_sensor,
+                    timing_mode,
+                    injected_execution_time_s,
                 )
                 outputs[body.name] = output
                 previous_mode = previous_modes.get(body.name)
@@ -1360,6 +1387,8 @@ def run_simulation(
                     True,
                     outputs["core_stage"],
                     record_sensor,
+                    timing_mode,
+                    injected_execution_time_s,
                 )
 
             current_values: dict[str, tuple[float, float, float]] = {}
@@ -1523,6 +1552,9 @@ def run_simulation(
                         "consecutive_overruns": int(
                             output.consecutive_overruns
                         ),
+                        "previous_execution_time_s": (
+                            output.previous_execution_time_s
+                        ),
                         "discrete_actuation_sequence": int(
                             output.discrete_actuation.sequence
                         ),
@@ -1640,6 +1672,14 @@ def run_simulation(
         "coordinate_frames": "ECEF truth, body attitude quaternion, NED reports",
         "simulation_only": True,
         "unvalidated": True,
+        "fsw_timing": {
+            "mode": timing_mode,
+            "injected_execution_time_s": (
+                injected_execution_time_s
+                if timing_mode == "injected"
+                else None
+            ),
+        },
         "cancelled": cancelled,
         "aero_out_of_envelope_samples": invalid_rows,
         "aero_out_of_envelope_pre_recovery_samples": invalid_pre_recovery_rows,
