@@ -177,7 +177,11 @@ def _stage_engines(stage: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _fault_active(
-    scenario: dict[str, Any], body: str, sensor: str, time_s: float
+    scenario: dict[str, Any],
+    body: str,
+    sensor: str,
+    time_s: float,
+    channel: int | None = None,
 ) -> dict[str, Any] | None:
     for fault in scenario.get("faults", []):
         start = float(fault.get("start_s", 0.0))
@@ -186,6 +190,11 @@ def _fault_active(
         if (
             fault.get("body", "all") in ("all", body)
             and target == sensor
+            and (
+                channel is None
+                or "channel" not in fault
+                or int(fault["channel"]) == channel
+            )
             and start <= time_s <= end
         ):
             return fault
@@ -218,6 +227,7 @@ def _sensor_frame(
     dt_s: float,
     launch_position: np.ndarray,
     separated: bool,
+    channel: int = 0,
 ) -> SensorFrame:
     sensors = scenario["sensors"]
     altitude = float(np.linalg.norm(body.position_ecef_m) - np.linalg.norm(launch_position))
@@ -259,7 +269,9 @@ def _sensor_frame(
     barometer_valid = 1
     gnss_valid = 1
     for name in ("barometer", "gnss", "imu"):
-        fault = _fault_active(scenario, body.name, name, time_s)
+        fault = _fault_active(
+            scenario, body.name, name, time_s, channel
+        )
         if not fault:
             continue
         kind = fault.get("type")
@@ -274,6 +286,17 @@ def _sensor_frame(
         elif name == "imu" and kind == "bias":
             gyro += float(fault.get("value", 0.0))
     vertical_velocity = float(np.dot(gnss_velocity, up))
+    if channel > 0:
+        barometer_altitude += float(
+            rng.normal(0.0, sensors["barometer_noise_m"])
+        )
+        gnss_position += rng.normal(
+            0.0, sensors["gnss_position_noise_m"], 3
+        )
+        gnss_velocity += rng.normal(
+            0.0, sensors["gnss_velocity_noise_m_s"], 3
+        )
+        vertical_velocity = float(np.dot(gnss_velocity, up))
     dynamic_pressure = max(
         0.0,
         body.last_dynamic_pressure_pa
@@ -286,6 +309,12 @@ def _sensor_frame(
             body.engine_health_percent
             + float(rng.normal(0.0, sensors.get("engine_health_noise_percent", 0.0))),
         ),
+    )
+    propulsion_running = (
+        body.engine_started_s is not None
+        and time_s
+            < body.engine_started_s
+                + float(body.stage["propulsion"]["burn_duration_s"])
     )
     return SensorFrame(
         time_s,
@@ -304,6 +333,10 @@ def _sensor_frame(
         int(separated),
         body.last_barometer_sample_s,
         body.last_gnss_sample_s,
+        int(engine_health > 0.0),
+        int(propulsion_running),
+        int(body.drogue_deployed),
+        int(body.main_deployed),
     )
 
 
@@ -316,23 +349,44 @@ def _run_fsw_substeps(
     launch_position: np.ndarray,
     separated: bool,
     current_output: FswOutput,
-    on_sensor: Callable[[str, SensorFrame], None] | None = None,
+    on_sensor: Callable[
+        [str, list[SensorFrame], FswOutput], None
+    ] | None = None,
 ) -> FswOutput:
     fsw_step_s = 1.0 / float(scenario["sensors"]["imu_rate_hz"])
     output = current_output
     while body.next_fsw_sample_s <= time_s + 1e-12:
-        frame = _sensor_frame(
-            body,
-            scenario,
-            rng,
-            body.next_fsw_sample_s,
-            fsw_step_s,
-            launch_position,
-            separated,
+        channel_count = int(scenario["sensors"].get("channel_count", 1))
+        frames = [
+            _sensor_frame(
+                body,
+                scenario,
+                rng,
+                body.next_fsw_sample_s,
+                fsw_step_s,
+                launch_position,
+                separated,
+                channel,
+            )
+            for channel in range(channel_count)
+        ]
+        frame = frames[0]
+        propulsion = body.stage["propulsion"]
+        burn_duration_s = float(propulsion["burn_duration_s"])
+        propulsion_running = (
+            body.engine_started_s is not None
+            and body.next_fsw_sample_s
+                < body.engine_started_s + burn_duration_s
+        )
+        output = core.step(
+            frame,
+            propulsion_running=propulsion_running,
+            drogue_deployed=body.drogue_deployed,
+            main_deployed=body.main_deployed,
+            sensor_channels=frames[1:],
         )
         if on_sensor:
-            on_sensor(body.name, frame)
-        output = core.step(frame)
+            on_sensor(body.name, frames, output)
         body.next_fsw_sample_s += fsw_step_s
     return output
 
@@ -359,7 +413,11 @@ def _propulsion(
     propulsion = body.stage["propulsion"]
     engines = _stage_engines(body.stage)
     body.last_engine_thrusts_n = {engine["id"]: 0.0 for engine in engines}
-    should_burn = body.stage_index == 0 and body.upper_mass_kg > 0.0
+    should_burn = False
+    if body.stage_index == 0 and body.upper_mass_kg > 0.0:
+        if output.stage1_ignite and body.engine_started_s is None:
+            body.engine_started_s = time_s
+        should_burn = body.engine_started_s is not None
     if body.stage_index == 1 and output.stage2_ignite:
         if body.engine_started_s is None:
             body.engine_started_s = time_s
@@ -781,8 +839,21 @@ def _telemetry_row(
         "fsw_fin_pitch_deg": math.degrees(output.fin_pitch_rad),
         "fsw_fin_yaw_deg": math.degrees(output.fin_yaw_rad),
         "fsw_navigation_status": NAVIGATION_STATUS_NAMES[output.navigation_status],
-        "fsw_fault_flags": int(output.fault_flags),
-        "fsw_faults": decode_faults(output.fault_flags),
+        "fsw_fault_flags": int(
+            output.active_fault_flags | output.latched_fault_flags
+        ),
+        "fsw_faults": decode_faults(
+            output.active_fault_flags | output.latched_fault_flags
+        ),
+        "fsw_active_fault_flags": int(output.active_fault_flags),
+        "fsw_latched_fault_flags": int(output.latched_fault_flags),
+        "fsw_highest_fault_severity": int(output.highest_fault_severity),
+        "fsw_altitude_sigma_m": output.altitude_sigma_m,
+        "fsw_vertical_velocity_sigma_m_s": output.vertical_velocity_sigma_m_s,
+        "fsw_command_sequence": int(output.command_sequence),
+        "fsw_command_type": int(output.command_type),
+        "fsw_command_result": int(output.command_result),
+        "fsw_inhibit_flags": int(output.inhibit_flags),
         "tvc_pitch_deg": math.degrees(body.last_tvc_rad[0]),
         "tvc_yaw_deg": math.degrees(body.last_tvc_rad[1]),
         "fin_roll_deg": math.degrees(body.last_fin_rad[0]),
@@ -889,6 +960,8 @@ def run_simulation(
     cancelled = False
     sensor_file = None
     sensor_writer = None
+    command_file = None
+    command_writer = None
     if persist:
         sensor_file = gzip.open(
             output_dir / "sensors.csv.gz",
@@ -899,10 +972,42 @@ def run_simulation(
         )
         sensor_writer = csv.DictWriter(sensor_file, fieldnames=SENSOR_CSV_FIELDS)
         sensor_writer.writeheader()
+        command_file = (output_dir / "commands.csv").open(
+            "w", newline="", encoding="utf-8"
+        )
+        command_writer = csv.DictWriter(
+            command_file,
+            fieldnames=(
+                "body",
+                "time_s",
+                "sequence",
+                "command_type",
+                "result",
+                "inhibit_flags",
+            ),
+        )
+        command_writer.writeheader()
 
-    def record_sensor(body_name: str, frame: SensorFrame) -> None:
+    def record_sensor(
+        body_name: str, frames: list[SensorFrame], output: FswOutput
+    ) -> None:
         if sensor_writer is not None:
-            sensor_writer.writerow(sensor_frame_to_row(body_name, frame))
+            for channel, frame in enumerate(frames):
+                sensor_writer.writerow(
+                    sensor_frame_to_row(body_name, frame, channel)
+                )
+        if command_writer is not None and output.event_flags & (1 << 2):
+            frame = frames[0]
+            command_writer.writerow(
+                {
+                    "body": body_name,
+                    "time_s": frame.time_s,
+                    "sequence": int(output.command_sequence),
+                    "command_type": int(output.command_type),
+                    "result": int(output.command_result),
+                    "inhibit_flags": int(output.inhibit_flags),
+                }
+            )
 
     try:
         while time_s <= max_time_s:
@@ -1108,8 +1213,43 @@ def run_simulation(
                         "navigation_status": NAVIGATION_STATUS_NAMES[
                             output.navigation_status
                         ],
-                        "fault_flags": output.fault_flags,
-                        "faults": decode_faults(output.fault_flags),
+                        "fault_flags": int(
+                            output.active_fault_flags
+                            | output.latched_fault_flags
+                        ),
+                        "active_fault_flags": int(output.active_fault_flags),
+                        "latched_fault_flags": int(output.latched_fault_flags),
+                        "changed_fault_flags": int(output.changed_fault_flags),
+                        "faults": decode_faults(
+                            output.active_fault_flags
+                            | output.latched_fault_flags
+                        ),
+                        "highest_fault_severity": int(
+                            output.highest_fault_severity
+                        ),
+                        "altitude_sigma_m": output.altitude_sigma_m,
+                        "vertical_velocity_sigma_m_s": (
+                            output.vertical_velocity_sigma_m_s
+                        ),
+                        "attitude_sigma_x_rad": output.attitude_sigma_rad[0],
+                        "attitude_sigma_y_rad": output.attitude_sigma_rad[1],
+                        "attitude_sigma_z_rad": output.attitude_sigma_rad[2],
+                        "barometer_innovation_m": (
+                            output.barometer_innovation_m
+                        ),
+                        "gnss_altitude_innovation_m": (
+                            output.gnss_altitude_innovation_m
+                        ),
+                        "gnss_velocity_innovation_m_s": (
+                            output.gnss_velocity_innovation_m_s
+                        ),
+                        "command_sequence": int(output.command_sequence),
+                        "command_type": int(output.command_type),
+                        "command_result": int(output.command_result),
+                        "inhibit_flags": int(output.inhibit_flags),
+                        "consecutive_overruns": int(
+                            output.consecutive_overruns
+                        ),
                     }
                     summary_statistics["telemetry_samples"] += 1
                     summary_statistics["aero_out_of_envelope_samples"] += int(
@@ -1169,6 +1309,8 @@ def run_simulation(
             core.close()
         if sensor_file is not None:
             sensor_file.close()
+        if command_file is not None:
+            command_file.close()
 
     invalid_rows = int(
         summary_statistics["aero_out_of_envelope_samples"]
@@ -1302,6 +1444,7 @@ def run_simulation(
         artifact_names = [
             "scenario.json",
             "sensors.csv.gz",
+            "commands.csv",
             "truth.csv",
             "fsw.csv",
             "events.csv",

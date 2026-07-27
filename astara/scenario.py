@@ -465,6 +465,32 @@ def validate_scenario(scenario: dict[str, Any]) -> None:
         if previous_time is not None and point["time_s"] <= previous_time:
             raise ValueError("mission.attitude_schedule times must strictly increase")
         previous_time = point["time_s"]
+    commands = mission.get("commands", [])
+    if not isinstance(commands, list):
+        raise ValueError("mission.commands must be a list")
+    previous_command_time = None
+    allowed_commands = {"ARM", "DISARM", "LAUNCH", "ABORT", "CLEAR_FAULTS"}
+    for index, command in enumerate(commands):
+        if not isinstance(command, dict):
+            raise ValueError(f"mission.commands[{index}] must be an object")
+        time_s = command.get("time_s")
+        command_name = command.get("command")
+        if (
+            not isinstance(time_s, (int, float))
+            or not math.isfinite(time_s)
+            or time_s < 0.0
+        ):
+            raise ValueError(
+                f"mission.commands[{index}].time_s must be finite and nonnegative"
+            )
+        if command_name not in allowed_commands:
+            raise ValueError(
+                f"mission.commands[{index}].command must be one of "
+                f"{sorted(allowed_commands)}"
+            )
+        if previous_command_time is not None and time_s <= previous_command_time:
+            raise ValueError("mission.commands times must strictly increase")
+        previous_command_time = time_s
 
     actuators = scenario.get("actuators", {})
     _positive(
@@ -475,6 +501,13 @@ def validate_scenario(scenario: dict[str, Any]) -> None:
 
     sensors = scenario.get("sensors", {})
     _positive(sensors, ("imu_rate_hz", "barometer_rate_hz", "gnss_rate_hz"), "sensors")
+    channel_count = sensors.get("channel_count", 1)
+    if (
+        not isinstance(channel_count, int)
+        or isinstance(channel_count, bool)
+        or not 1 <= channel_count <= 3
+    ):
+        raise ValueError("sensors.channel_count must be an integer from 1 to 3")
     for name in (
         "barometer_timeout_s",
         "gnss_timeout_s",

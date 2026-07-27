@@ -78,8 +78,9 @@ The command writes:
 - `monte_carlo.csv`: sampled factors, random seed, status/failure reason, max Q,
   max Mach, apogee, stage burnout times, and both stage impact points
 - `retained_runs.csv`: retained-run reason and relative artifact directory
-- `retained_runs/`: complete sensor, truth, FSW, event, scenario, vehicle, and
-  manifest artifacts for every failure and a deterministic 2% successful sample
+- `retained_runs/`: complete sensor, command, truth, FSW, event, scenario,
+  vehicle, and manifest artifacts for every failure and a deterministic 2%
+  successful sample
 - `summary.json`: provenance, declared uncertainty, convergence result, and
   P5/median/P95 result ranges plus CPU/worker and retention counts
 - `scenario.json`: the exact analyzed input

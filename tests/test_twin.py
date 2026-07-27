@@ -195,11 +195,21 @@ class TwinTests(unittest.TestCase):
             sensor_path = Path(first.output_dir) / "sensors.csv.gz"
             self.assertTrue(sensor_path.exists())
             self.assertIn("sensors.csv.gz", first.manifest["artifacts"])
+            command_path = Path(first.output_dir) / "commands.csv"
+            self.assertTrue(command_path.exists())
+            self.assertIn("commands.csv", first.manifest["artifacts"])
             with gzip.open(
                 sensor_path, "rt", newline="", encoding="utf-8"
             ) as file:
                 sensor_rows = list(csv.DictReader(file))
             self.assertTrue(sensor_rows)
+            self.assertEqual({row["channel"] for row in sensor_rows}, {"0", "1", "2"})
+            with command_path.open(newline="", encoding="utf-8") as file:
+                command_rows = list(csv.DictReader(file))
+            self.assertEqual(
+                [row["command_type"] for row in command_rows],
+                ["1", "3"],
+            )
             self.assertTrue(
                 any(
                     abs(float(row["engine_health_percent"]) - 100.0) > 1e-9

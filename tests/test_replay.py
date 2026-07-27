@@ -43,8 +43,34 @@ class ReplayTests(unittest.TestCase):
                         0,
                         index * 0.005,
                         index * 0.005,
+                        1,
+                        int(index > 0),
+                        0,
+                        0,
                     )
                     writer.writerow(sensor_frame_to_row("integrated_stack", frame))
+            with (Path(directory) / "commands.csv").open(
+                "w", newline="", encoding="utf-8"
+            ) as file:
+                writer = csv.DictWriter(
+                    file,
+                    fieldnames=("body", "time_s", "command_type"),
+                )
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "body": "integrated_stack",
+                        "time_s": 0.0,
+                        "command_type": 1,
+                    }
+                )
+                writer.writerow(
+                    {
+                        "body": "integrated_stack",
+                        "time_s": 0.005,
+                        "command_type": 3,
+                    }
+                )
 
             first = replay_fsw(scenario, sensor_path, Path(directory) / "first.csv")
             second = replay_fsw(scenario, sensor_path, Path(directory) / "second.csv")
@@ -54,6 +80,7 @@ class ReplayTests(unittest.TestCase):
                 rows = list(csv.DictReader(file))
             self.assertEqual(len(rows), 40)
             self.assertEqual(rows[-1]["mode"], "BOOST_1")
+            self.assertEqual(rows[-1]["command_source"], "recorded")
 
     def test_old_sensor_rows_default_sample_times_to_frame_time(self) -> None:
         vector = SensorFrame._fields_[2][1]

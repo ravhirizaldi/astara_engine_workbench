@@ -90,9 +90,43 @@ bool valid_config(const FswConfig& config) {
         config.stationary_gyro_threshold_rad_s,
         config.altitude_filter_tau_s,
         config.velocity_filter_tau_s,
+        config.magnetic_disagreement,
+        config.command_timeout_s,
+        config.launch_confirm_timeout_s,
+        config.separation_confirm_timeout_s,
+        config.stage2_ignition_timeout_s,
+        config.drogue_confirm_timeout_s,
+        config.main_confirm_timeout_s,
+        config.fault_recovery_persistence_s,
+        config.min_step_s,
+        config.max_step_s,
+        config.loop_deadline_s,
+        config.propulsion_abort_health_percent,
+        config.propulsion_abort_persistence_s,
+        config.max_acceleration_m_s2,
+        config.max_gyro_rad_s,
+        config.min_magnetic_norm,
+        config.max_magnetic_norm,
+        config.min_barometer_altitude_m,
+        config.max_barometer_altitude_m,
+        config.max_barometer_rate_m_s,
+        config.min_gnss_radius_m,
+        config.max_gnss_radius_m,
+        config.max_gnss_speed_m_s,
+        config.max_gnss_velocity_rate_m_s2,
+        config.accelerometer_process_sigma_m_s2,
+        config.gyro_process_sigma_rad_s,
+        config.barometer_sigma_m,
+        config.gnss_altitude_sigma_m,
+        config.gnss_velocity_sigma_m_s,
+        config.max_altitude_sigma_m,
+        config.max_velocity_sigma_m_s,
+        config.max_attitude_sigma_rad,
     };
     if (
-        !finite_vector(
+        config.abi_version != FSW_ABI_VERSION
+        || config.struct_size != sizeof(FswConfig)
+        || !finite_vector(
             finite_values,
             static_cast<int>(sizeof(finite_values) / sizeof(finite_values[0]))
         )
@@ -121,6 +155,39 @@ bool valid_config(const FswConfig& config) {
         || config.stationary_gyro_threshold_rad_s <= 0.0
         || config.altitude_filter_tau_s <= 0.0
         || config.velocity_filter_tau_s <= 0.0
+        || config.magnetic_disagreement <= 0.0
+        || config.command_timeout_s <= 0.0
+        || config.launch_confirm_timeout_s <= 0.0
+        || config.separation_confirm_timeout_s <= 0.0
+        || config.stage2_ignition_timeout_s <= 0.0
+        || config.drogue_confirm_timeout_s <= 0.0
+        || config.main_confirm_timeout_s <= 0.0
+        || config.fault_recovery_persistence_s <= 0.0
+        || config.min_step_s <= 0.0
+        || config.max_step_s < config.min_step_s
+        || config.loop_deadline_s <= 0.0
+        || config.overrun_abort_count == 0
+        || config.propulsion_abort_health_percent < 0.0
+        || config.propulsion_abort_health_percent > 100.0
+        || config.propulsion_abort_persistence_s <= 0.0
+        || config.max_acceleration_m_s2 <= 0.0
+        || config.max_gyro_rad_s <= 0.0
+        || config.min_magnetic_norm < 0.0
+        || config.max_magnetic_norm <= config.min_magnetic_norm
+        || config.max_barometer_altitude_m
+            <= config.min_barometer_altitude_m
+        || config.max_barometer_rate_m_s <= 0.0
+        || config.max_gnss_radius_m <= config.min_gnss_radius_m
+        || config.max_gnss_speed_m_s <= 0.0
+        || config.max_gnss_velocity_rate_m_s2 <= 0.0
+        || config.accelerometer_process_sigma_m_s2 <= 0.0
+        || config.gyro_process_sigma_rad_s <= 0.0
+        || config.barometer_sigma_m <= 0.0
+        || config.gnss_altitude_sigma_m <= 0.0
+        || config.gnss_velocity_sigma_m_s <= 0.0
+        || config.max_altitude_sigma_m <= 0.0
+        || config.max_velocity_sigma_m_s <= 0.0
+        || config.max_attitude_sigma_rad <= 0.0
         || config.guidance_count < 2
         || config.guidance_count > FSW_MAX_GUIDANCE_POINTS
         || config.body_role < FSW_BODY_INTEGRATED
@@ -148,20 +215,26 @@ bool valid_timestamp(double sample_time_s, double suite_time_s) {
         && sample_time_s <= suite_time_s + kEpsilon;
 }
 
-bool valid_sample(const FswSensorSuite& sensor) {
+bool valid_discrete(
+    const FswDiscreteSample& sample,
+    double time_s
+) {
+    return !sample.valid || valid_timestamp(sample.sample_time_s, time_s);
+}
+
+bool valid_input(const FswInput& input, const FswConfig& config) {
+    const auto& sensor = input.sensors;
     if (
-        !std::isfinite(sensor.time_s)
+        input.abi_version != FSW_ABI_VERSION
+        || input.struct_size != sizeof(FswInput)
+        || !std::isfinite(sensor.time_s)
         || sensor.time_s < 0.0
         || !std::isfinite(sensor.dt_s)
-        || sensor.dt_s <= 0.0
+        || sensor.dt_s < config.min_step_s
+        || sensor.dt_s > config.max_step_s
         || sensor.imu_count > FSW_MAX_SENSOR_CHANNELS
         || sensor.barometer_count > FSW_MAX_SENSOR_CHANNELS
         || sensor.gnss_count > FSW_MAX_SENSOR_CHANNELS
-        || !std::isfinite(sensor.dynamic_pressure_pa)
-        || sensor.dynamic_pressure_pa < 0.0
-        || !std::isfinite(sensor.engine_health_percent)
-        || sensor.engine_health_percent < 0.0
-        || sensor.engine_health_percent > 100.0
     ) {
         return false;
     }
@@ -205,6 +278,60 @@ bool valid_sample(const FswSensorSuite& sensor) {
             return false;
         }
     }
+    if (
+        input.air_data.valid
+        && (
+            !std::isfinite(input.air_data.dynamic_pressure_pa)
+            || input.air_data.dynamic_pressure_pa < 0.0
+            || !valid_timestamp(
+                input.air_data.sample_time_s, sensor.time_s
+            )
+        )
+    ) {
+        return false;
+    }
+    if (
+        input.propulsion.valid
+        && (
+            !std::isfinite(input.propulsion.health_percent)
+            || input.propulsion.health_percent < 0.0
+            || input.propulsion.health_percent > 100.0
+            || !valid_timestamp(
+                input.propulsion.sample_time_s, sensor.time_s
+            )
+        )
+    ) {
+        return false;
+    }
+    if (
+        !valid_discrete(input.discretes.stage_separated, sensor.time_s)
+        || !valid_discrete(input.discretes.drogue_deployed, sensor.time_s)
+        || !valid_discrete(input.discretes.main_deployed, sensor.time_s)
+        || (
+            input.platform.valid
+            && (
+                !std::isfinite(input.platform.sample_time_s)
+                || !std::isfinite(input.platform.previous_execution_time_s)
+                || input.platform.previous_execution_time_s < 0.0
+                || !valid_timestamp(
+                    input.platform.sample_time_s, sensor.time_s
+                )
+            )
+        )
+        || input.command.type < FSW_COMMAND_NONE
+        || input.command.type > FSW_COMMAND_CLEAR_FAULTS
+        || (
+            input.command.type != FSW_COMMAND_NONE
+            && (
+                input.command.sequence == 0
+                || !valid_timestamp(
+                    input.command.issue_time_s, sensor.time_s
+                )
+            )
+        )
+    ) {
+        return false;
+    }
     return true;
 }
 
@@ -224,6 +351,10 @@ struct ChannelHealth {
     uint32_t good_samples{};
     bool rejected{};
     double last_evaluated_sample_time_s{-1.0};
+    double last_value_time_s{-1.0};
+    std::array<double, 3> last_values{};
+    uint32_t flags{};
+    double age_s{};
 };
 
 struct VotedSensors {
@@ -244,6 +375,9 @@ struct VotedSensors {
     uint32_t barometer_usable_mask{};
     uint32_t gnss_usable_mask{};
     uint32_t disagreement_flags{};
+    double barometer_innovation{};
+    double gnss_altitude_innovation{};
+    double gnss_velocity_innovation{};
 };
 
 struct Context {
@@ -268,7 +402,12 @@ struct Context {
         apogee_seen = false;
         drogue_deployed = false;
         main_deployed = false;
-        fault_flags = 0;
+        active_fault_flags = 0;
+        latched_fault_flags = 0;
+        previous_active_fault_flags = 0;
+        changed_fault_flags = 0;
+        fault_occurrence_count = {};
+        highest_fault_severity = FSW_SEVERITY_NONE;
         disagreement_flags = 0;
         sensor_status_flags = 0;
         imu_usable_mask = 0;
@@ -291,6 +430,39 @@ struct Context {
         apogee_evidence_s = 0.0;
         landing_evidence_s = 0.0;
         imu_loss_evidence_s = 0.0;
+        propulsion_loss_evidence_s = 0.0;
+        fault_healthy_time_s = {};
+        ignition_started_s = -1.0;
+        separation_started_s = -1.0;
+        stage2_ignition_started_s = -1.0;
+        drogue_commanded_s = -1.0;
+        main_commanded_s = -1.0;
+        last_command_sequence = 0;
+        command_sequence = 0;
+        command_type = FSW_COMMAND_NONE;
+        command_result = FSW_COMMAND_NOT_PROCESSED;
+        inhibit_flags = 0;
+        event_flags = 0;
+        stage1_ignite_request = false;
+        stage2_ignite_request = false;
+        previous_mode = mode;
+        altitude_variance = config.barometer_sigma_m
+            * config.barometer_sigma_m;
+        velocity_variance = config.gnss_velocity_sigma_m_s
+            * config.gnss_velocity_sigma_m_s;
+        attitude_variance = {
+            config.gyro_process_sigma_rad_s
+                * config.gyro_process_sigma_rad_s,
+            config.gyro_process_sigma_rad_s
+                * config.gyro_process_sigma_rad_s,
+            config.gyro_process_sigma_rad_s
+                * config.gyro_process_sigma_rad_s,
+        };
+        barometer_innovation = 0.0;
+        gnss_altitude_innovation = 0.0;
+        gnss_velocity_innovation = 0.0;
+        consecutive_overruns = 0;
+        previous_execution_time_s = 0.0;
     }
 
     FswConfig config;
@@ -306,7 +478,12 @@ struct Context {
     bool apogee_seen{};
     bool drogue_deployed{};
     bool main_deployed{};
-    uint32_t fault_flags{};
+    uint32_t active_fault_flags{};
+    uint32_t latched_fault_flags{};
+    uint32_t previous_active_fault_flags{};
+    uint32_t changed_fault_flags{};
+    std::array<uint32_t, FSW_FAULT_COUNT> fault_occurrence_count{};
+    int32_t highest_fault_severity{};
     uint32_t disagreement_flags{};
     uint32_t sensor_status_flags{};
     uint32_t imu_usable_mask{};
@@ -329,6 +506,30 @@ struct Context {
     double apogee_evidence_s{};
     double landing_evidence_s{};
     double imu_loss_evidence_s{};
+    double propulsion_loss_evidence_s{};
+    std::array<double, FSW_FAULT_COUNT> fault_healthy_time_s{};
+    double ignition_started_s{};
+    double separation_started_s{};
+    double stage2_ignition_started_s{};
+    double drogue_commanded_s{};
+    double main_commanded_s{};
+    uint64_t last_command_sequence{};
+    uint64_t command_sequence{};
+    int32_t command_type{};
+    int32_t command_result{};
+    uint32_t inhibit_flags{};
+    uint32_t event_flags{};
+    bool stage1_ignite_request{};
+    bool stage2_ignite_request{};
+    int32_t previous_mode{};
+    double altitude_variance{};
+    double velocity_variance{};
+    std::array<double, 3> attitude_variance{};
+    double barometer_innovation{};
+    double gnss_altitude_innovation{};
+    double gnss_velocity_innovation{};
+    uint32_t consecutive_overruns{};
+    double previous_execution_time_s{};
 };
 
 bool persisted(
@@ -392,6 +593,153 @@ uint32_t rejected_mask(
     return mask;
 }
 
+bool evaluate_imu_channel(
+    ChannelHealth& health,
+    const FswImuSample& sample,
+    double time_s,
+    const FswConfig& config
+) {
+    health.flags = 0;
+    health.age_s = sample.valid
+        ? std::max(time_s - sample.sample_time_s, 0.0)
+        : 0.0;
+    if (!sample.valid) {
+        health.flags |= FSW_SENSOR_HEALTH_INVALID;
+        return false;
+    }
+    if (!fresh(
+        true, sample.sample_time_s, time_s, config.imu_timeout_s
+    )) {
+        health.flags |= FSW_SENSOR_HEALTH_STALE;
+        return false;
+    }
+    const double magnetic_norm = vector_norm(sample.magnetic_body, 3);
+    if (
+        vector_norm(sample.acceleration_body_m_s2, 3)
+            > config.max_acceleration_m_s2
+        || vector_norm(sample.gyro_body_rad_s, 3) > config.max_gyro_rad_s
+        || magnetic_norm < config.min_magnetic_norm
+        || magnetic_norm > config.max_magnetic_norm
+    ) {
+        health.flags |= FSW_SENSOR_HEALTH_OUT_OF_RANGE;
+        return false;
+    }
+    if (health.rejected) {
+        health.flags |= FSW_SENSOR_HEALTH_REJECTED;
+    }
+    return true;
+}
+
+bool evaluate_barometer_channel(
+    ChannelHealth& health,
+    const FswBarometerSample& sample,
+    double time_s,
+    const FswConfig& config
+) {
+    health.flags = 0;
+    health.age_s = sample.valid
+        ? std::max(time_s - sample.sample_time_s, 0.0)
+        : 0.0;
+    if (!sample.valid) {
+        health.flags |= FSW_SENSOR_HEALTH_INVALID;
+        return false;
+    }
+    if (!fresh(
+        true, sample.sample_time_s, time_s, config.barometer_timeout_s
+    )) {
+        health.flags |= FSW_SENSOR_HEALTH_STALE;
+        return false;
+    }
+    if (
+        sample.altitude_m < config.min_barometer_altitude_m
+        || sample.altitude_m > config.max_barometer_altitude_m
+    ) {
+        health.flags |= FSW_SENSOR_HEALTH_OUT_OF_RANGE;
+        return false;
+    }
+    if (
+        health.last_value_time_s >= 0.0
+        && sample.sample_time_s > health.last_value_time_s + kEpsilon
+        && std::abs(sample.altitude_m - health.last_values[0])
+            / (sample.sample_time_s - health.last_value_time_s)
+            > config.max_barometer_rate_m_s
+    ) {
+        health.flags |= FSW_SENSOR_HEALTH_RATE_LIMIT;
+        health.last_values[0] = sample.altitude_m;
+        health.last_value_time_s = sample.sample_time_s;
+        return false;
+    }
+    if (sample.sample_time_s > health.last_value_time_s + kEpsilon) {
+        health.last_values[0] = sample.altitude_m;
+        health.last_value_time_s = sample.sample_time_s;
+    }
+    if (health.rejected) {
+        health.flags |= FSW_SENSOR_HEALTH_REJECTED;
+    }
+    return true;
+}
+
+bool evaluate_gnss_channel(
+    ChannelHealth& health,
+    const FswGnssSample& sample,
+    double time_s,
+    const FswConfig& config
+) {
+    health.flags = 0;
+    health.age_s = sample.valid
+        ? std::max(time_s - sample.sample_time_s, 0.0)
+        : 0.0;
+    if (!sample.valid) {
+        health.flags |= FSW_SENSOR_HEALTH_INVALID;
+        return false;
+    }
+    if (!fresh(
+        true, sample.sample_time_s, time_s, config.gnss_timeout_s
+    )) {
+        health.flags |= FSW_SENSOR_HEALTH_STALE;
+        return false;
+    }
+    const double radius = vector_norm(sample.gnss_position_ecef_m, 3);
+    const double speed = vector_norm(sample.gnss_velocity_ecef_m_s, 3);
+    if (
+        radius < config.min_gnss_radius_m
+        || radius > config.max_gnss_radius_m
+        || speed > config.max_gnss_speed_m_s
+    ) {
+        health.flags |= FSW_SENSOR_HEALTH_OUT_OF_RANGE;
+        return false;
+    }
+    if (
+        health.last_value_time_s >= 0.0
+        && sample.sample_time_s > health.last_value_time_s + kEpsilon
+        && vector_distance(
+            sample.gnss_velocity_ecef_m_s,
+            health.last_values.data(),
+            3
+        ) / (sample.sample_time_s - health.last_value_time_s)
+            > config.max_gnss_velocity_rate_m_s2
+    ) {
+        health.flags |= FSW_SENSOR_HEALTH_RATE_LIMIT;
+        for (int axis = 0; axis < 3; ++axis) {
+            health.last_values[axis] =
+                sample.gnss_velocity_ecef_m_s[axis];
+        }
+        health.last_value_time_s = sample.sample_time_s;
+        return false;
+    }
+    if (sample.sample_time_s > health.last_value_time_s + kEpsilon) {
+        for (int axis = 0; axis < 3; ++axis) {
+            health.last_values[axis] =
+                sample.gnss_velocity_ecef_m_s[axis];
+        }
+        health.last_value_time_s = sample.sample_time_s;
+    }
+    if (health.rejected) {
+        health.flags |= FSW_SENSOR_HEALTH_REJECTED;
+    }
+    return true;
+}
+
 bool imu_samples_agree(
     const FswImuSample& left,
     const FswImuSample& right,
@@ -404,13 +752,19 @@ bool imu_samples_agree(
     const bool gyro_agrees = vector_distance(
         left.gyro_body_rad_s, right.gyro_body_rad_s, 3
     ) <= config.gyro_disagreement_rad_s;
+    const bool magnetic_agrees = vector_distance(
+        left.magnetic_body, right.magnetic_body, 3
+    ) <= config.magnetic_disagreement;
     if (!acceleration_agrees) {
         disagreement_flags |= FSW_DISAGREEMENT_ACCELERATION;
     }
     if (!gyro_agrees) {
         disagreement_flags |= FSW_DISAGREEMENT_GYRO;
     }
-    return acceleration_agrees && gyro_agrees;
+    if (!magnetic_agrees) {
+        disagreement_flags |= FSW_DISAGREEMENT_MAGNETOMETER;
+    }
+    return acceleration_agrees && gyro_agrees && magnetic_agrees;
 }
 
 void average_imus(
@@ -447,11 +801,11 @@ void vote_imus(
     uint32_t healthy_mask = 0;
     for (uint32_t index = 0; index < suite.imu_count; ++index) {
         const auto& sample = suite.imus[index];
-        if (fresh(
-            sample.valid,
-            sample.sample_time_s,
+        if (evaluate_imu_channel(
+            context.imu_health[index],
+            sample,
             suite.time_s,
-            context.config.imu_timeout_s
+            context.config
         )) {
             fresh_mask |= 1u << index;
             if (!context.imu_health[index].rejected) {
@@ -483,6 +837,7 @@ void vote_imus(
     } else if (healthy_count == 3) {
         double acceleration_median[3]{};
         double gyro_median[3]{};
+        double magnetic_median[3]{};
         for (int axis = 0; axis < 3; ++axis) {
             acceleration_median[axis] = median3(
                 suite.imus[0].acceleration_body_m_s2[axis],
@@ -493,6 +848,11 @@ void vote_imus(
                 suite.imus[0].gyro_body_rad_s[axis],
                 suite.imus[1].gyro_body_rad_s[axis],
                 suite.imus[2].gyro_body_rad_s[axis]
+            );
+            magnetic_median[axis] = median3(
+                suite.imus[0].magnetic_body[axis],
+                suite.imus[1].magnetic_body[axis],
+                suite.imus[2].magnetic_body[axis]
             );
         }
         for (uint32_t index = 0; index < suite.imu_count; ++index) {
@@ -506,7 +866,12 @@ void vote_imus(
                 gyro_median,
                 3
             ) <= context.config.gyro_disagreement_rad_s;
-            if (acceleration_agrees && gyro_agrees) {
+            const bool magnetic_agrees = vector_distance(
+                suite.imus[index].magnetic_body,
+                magnetic_median,
+                3
+            ) <= context.config.magnetic_disagreement;
+            if (acceleration_agrees && gyro_agrees && magnetic_agrees) {
                 consensus_mask |= 1u << index;
             } else {
                 if (!acceleration_agrees) {
@@ -515,6 +880,10 @@ void vote_imus(
                 }
                 if (!gyro_agrees) {
                     voted.disagreement_flags |= FSW_DISAGREEMENT_GYRO;
+                }
+                if (!magnetic_agrees) {
+                    voted.disagreement_flags |=
+                        FSW_DISAGREEMENT_MAGNETOMETER;
                 }
             }
         }
@@ -535,6 +904,9 @@ void vote_imus(
             continue;
         }
         bool agrees = (consensus_mask & (1u << index)) != 0;
+        if (!agrees) {
+            health.flags |= FSW_SENSOR_HEALTH_DISAGREEMENT;
+        }
         if (health.rejected && voted.imu_valid) {
             FswImuSample fused{};
             for (int axis = 0; axis < 3; ++axis) {
@@ -556,6 +928,9 @@ void vote_imus(
             healthy_count >= 3,
             context.config
         );
+        if (health.rejected) {
+            health.flags |= FSW_SENSOR_HEALTH_REJECTED;
+        }
     }
 }
 
@@ -568,11 +943,11 @@ void vote_barometers(
     uint32_t healthy_mask = 0;
     for (uint32_t index = 0; index < suite.barometer_count; ++index) {
         const auto& sample = suite.barometers[index];
-        if (fresh(
-            sample.valid,
-            sample.sample_time_s,
+        if (evaluate_barometer_channel(
+            context.barometer_health[index],
+            sample,
             suite.time_s,
-            context.config.barometer_timeout_s
+            context.config
         )) {
             fresh_mask |= 1u << index;
             if (!context.barometer_health[index].rejected) {
@@ -649,6 +1024,9 @@ void vote_barometers(
             continue;
         }
         bool agrees = (consensus_mask & (1u << index)) != 0;
+        if (!agrees) {
+            health.flags |= FSW_SENSOR_HEALTH_DISAGREEMENT;
+        }
         if (health.rejected && voted.barometer_valid) {
             agrees = std::abs(
                 suite.barometers[index].altitude_m
@@ -661,6 +1039,9 @@ void vote_barometers(
             healthy_count >= 3,
             context.config
         );
+        if (health.rejected) {
+            health.flags |= FSW_SENSOR_HEALTH_REJECTED;
+        }
     }
 }
 
@@ -723,11 +1104,11 @@ void vote_gnss(
     uint32_t healthy_mask = 0;
     for (uint32_t index = 0; index < suite.gnss_count; ++index) {
         const auto& sample = suite.gnss[index];
-        if (fresh(
-            sample.valid,
-            sample.sample_time_s,
+        if (evaluate_gnss_channel(
+            context.gnss_health[index],
+            sample,
             suite.time_s,
-            context.config.gnss_timeout_s
+            context.config
         )) {
             fresh_mask |= 1u << index;
             if (!context.gnss_health[index].rejected) {
@@ -821,6 +1202,9 @@ void vote_gnss(
             continue;
         }
         bool agrees = (consensus_mask & (1u << index)) != 0;
+        if (!agrees) {
+            health.flags |= FSW_SENSOR_HEALTH_DISAGREEMENT;
+        }
         if (health.rejected && voted.gnss_valid) {
             FswGnssSample fused{};
             for (int axis = 0; axis < 3; ++axis) {
@@ -844,6 +1228,9 @@ void vote_gnss(
             healthy_count >= 3,
             context.config
         );
+        if (health.rejected) {
+            health.flags |= FSW_SENSOR_HEALTH_REJECTED;
+        }
     }
 }
 
@@ -956,30 +1343,92 @@ double filter_alpha(double sample_delta_s, double tau_s) {
     return 1.0 - std::exp(-std::max(sample_delta_s, kEpsilon) / tau_s);
 }
 
+uint32_t critical_fault_mask() {
+    return FSW_FAULT_PROPULSION_HEALTH
+        | FSW_FAULT_IMU_UNAVAILABLE
+        | FSW_FAULT_DEADLINE_OVERRUN
+        | FSW_FAULT_WATCHDOG
+        | FSW_FAULT_LAUNCH_NOT_CONFIRMED
+        | FSW_FAULT_SEPARATION_NOT_CONFIRMED
+        | FSW_FAULT_STAGE2_IGNITION
+        | FSW_FAULT_DROGUE_NOT_CONFIRMED
+        | FSW_FAULT_MAIN_NOT_CONFIRMED
+        | FSW_FAULT_INPUT_TIMING;
+}
+
+int32_t fault_severity(uint32_t flags) {
+    if (
+        flags & (
+            FSW_FAULT_DROGUE_NOT_CONFIRMED
+            | FSW_FAULT_MAIN_NOT_CONFIRMED
+        )
+    ) {
+        return FSW_SEVERITY_MISSION_ENDING;
+    }
+    if (flags & critical_fault_mask()) {
+        return FSW_SEVERITY_CRITICAL;
+    }
+    if (
+        flags & (
+            FSW_FAULT_NAV_INERTIAL
+            | FSW_FAULT_NAV_DISAGREEMENT
+            | FSW_FAULT_NAV_UNCERTAINTY
+            | FSW_FAULT_PROPULSION_UNAVAILABLE
+        )
+    ) {
+        return FSW_SEVERITY_DEGRADED;
+    }
+    return flags == 0 ? FSW_SEVERITY_NONE : FSW_SEVERITY_WARNING;
+}
+
+void commit_faults(Context& context, uint32_t flags) {
+    const uint32_t rising = flags & ~context.previous_active_fault_flags;
+    context.changed_fault_flags =
+        flags ^ context.previous_active_fault_flags;
+    for (uint32_t index = 0; index < FSW_FAULT_COUNT; ++index) {
+        if (rising & (1u << index)) {
+            ++context.fault_occurrence_count[index];
+        }
+    }
+    context.active_fault_flags = flags;
+    context.latched_fault_flags |= flags;
+    context.previous_active_fault_flags = flags;
+    context.highest_fault_severity = fault_severity(flags);
+    if (context.changed_fault_flags != 0) {
+        context.event_flags |= FSW_EVENT_FAULT_CHANGED;
+    }
+}
+
 void set_faults(
     Context& context,
-    const FswSensorSuite& suite,
+    const FswInput& input,
     const VotedSensors& voted,
     bool navigation_disagreement
 ) {
-    context.fault_flags = 0;
+    uint32_t flags = 0;
     if (!voted.gnss_valid) {
-        context.fault_flags |= FSW_FAULT_GNSS_UNAVAILABLE;
+        flags |= FSW_FAULT_GNSS_UNAVAILABLE;
     }
     if (!voted.barometer_valid) {
-        context.fault_flags |= FSW_FAULT_BAROMETER_UNAVAILABLE;
+        flags |= FSW_FAULT_BAROMETER_UNAVAILABLE;
     }
     if (!voted.imu_valid) {
-        context.fault_flags |= FSW_FAULT_IMU_UNAVAILABLE;
+        flags |= FSW_FAULT_IMU_UNAVAILABLE;
     }
     if (
         context.disagreement_flags
         & (FSW_DISAGREEMENT_ACCELERATION | FSW_DISAGREEMENT_GYRO)
     ) {
-        context.fault_flags |= FSW_FAULT_IMU_DISAGREEMENT;
+        flags |= FSW_FAULT_IMU_DISAGREEMENT;
+    }
+    if (
+        context.disagreement_flags
+        & FSW_DISAGREEMENT_MAGNETOMETER
+    ) {
+        flags |= FSW_FAULT_MAGNETOMETER_DISAGREEMENT;
     }
     if (context.disagreement_flags & FSW_DISAGREEMENT_BAROMETER) {
-        context.fault_flags |= FSW_FAULT_BAROMETER_DISAGREEMENT;
+        flags |= FSW_FAULT_BAROMETER_DISAGREEMENT;
     }
     if (
         context.disagreement_flags
@@ -988,24 +1437,99 @@ void set_faults(
             | FSW_DISAGREEMENT_GNSS_VELOCITY
         )
     ) {
-        context.fault_flags |= FSW_FAULT_GNSS_DISAGREEMENT;
+        flags |= FSW_FAULT_GNSS_DISAGREEMENT;
     }
     if (navigation_disagreement) {
-        context.fault_flags |= FSW_FAULT_NAV_DISAGREEMENT;
+        flags |= FSW_FAULT_NAV_DISAGREEMENT;
     }
     if (context.navigation_status == FSW_NAV_INERTIAL) {
-        context.fault_flags |= FSW_FAULT_NAV_INERTIAL;
+        flags |= FSW_FAULT_NAV_INERTIAL;
     }
-    if (suite.engine_health_percent < 20.0) {
-        context.fault_flags |= FSW_FAULT_ENGINE_HEALTH;
+    const auto& suite = input.sensors;
+    const bool air_data_valid = fresh(
+        input.air_data.valid,
+        input.air_data.sample_time_s,
+        suite.time_s,
+        context.config.imu_timeout_s
+    );
+    if (!air_data_valid) {
+        flags |= FSW_FAULT_AIR_DATA_UNAVAILABLE;
     }
+    const bool propulsion_valid = fresh(
+        input.propulsion.valid,
+        input.propulsion.sample_time_s,
+        suite.time_s,
+        context.config.imu_timeout_s
+    );
+    if (!propulsion_valid) {
+        flags |= FSW_FAULT_PROPULSION_UNAVAILABLE;
+    } else if (
+        input.propulsion.health_percent
+        < context.config.propulsion_abort_health_percent
+    ) {
+        flags |= FSW_FAULT_PROPULSION_HEALTH;
+    }
+    if (
+        std::sqrt(context.altitude_variance)
+            > context.config.max_altitude_sigma_m
+        || std::sqrt(context.velocity_variance)
+            > context.config.max_velocity_sigma_m_s
+        || std::sqrt(*std::max_element(
+            context.attitude_variance.begin(),
+            context.attitude_variance.end()
+        )) > context.config.max_attitude_sigma_rad
+    ) {
+        flags |= FSW_FAULT_NAV_UNCERTAINTY;
+    }
+    if (input.platform.valid) {
+        context.previous_execution_time_s =
+            input.platform.previous_execution_time_s;
+        const bool overrun = input.platform.deadline_missed
+            || input.platform.previous_execution_time_s
+                > context.config.loop_deadline_s;
+        context.consecutive_overruns = overrun
+            ? context.consecutive_overruns + 1
+            : 0;
+        if (context.consecutive_overruns > 0) {
+            flags |= FSW_FAULT_DEADLINE_OVERRUN;
+        }
+        if (!input.platform.watchdog_healthy) {
+            flags |= FSW_FAULT_WATCHDOG;
+        }
+    }
+    flags |= context.active_fault_flags & (
+        FSW_FAULT_LAUNCH_NOT_CONFIRMED
+        | FSW_FAULT_SEPARATION_NOT_CONFIRMED
+        | FSW_FAULT_STAGE2_IGNITION
+        | FSW_FAULT_DROGUE_NOT_CONFIRMED
+        | FSW_FAULT_MAIN_NOT_CONFIRMED
+        | FSW_FAULT_INPUT_TIMING
+    );
+    for (uint32_t index = 0; index < FSW_FAULT_COUNT; ++index) {
+        const uint32_t bit = 1u << index;
+        if (flags & bit) {
+            context.fault_healthy_time_s[index] = 0.0;
+        } else if (context.active_fault_flags & bit) {
+            context.fault_healthy_time_s[index] += suite.dt_s;
+            if (
+                context.fault_healthy_time_s[index]
+                < context.config.fault_recovery_persistence_s
+            ) {
+                flags |= bit;
+            }
+        } else {
+            context.fault_healthy_time_s[index] = 0.0;
+        }
+    }
+    commit_faults(context, flags);
 }
 
 void update_navigation(
     Context& context,
-    const FswSensorSuite& suite,
+    const FswInput& input,
     const VotedSensors& voted
 ) {
+    const auto& suite = input.sensors;
     context.attitude_valid = voted.imu_valid;
     if (voted.imu_valid) {
         update_gyro_bias(context, voted, suite.dt_s);
@@ -1015,6 +1539,17 @@ void update_navigation(
                 voted.gyro[axis] - context.gyro_bias[axis];
         }
         integrate_attitude(context, corrected_gyro, suite.dt_s);
+        const double attitude_process =
+            context.config.gyro_process_sigma_rad_s * suite.dt_s;
+        for (double& variance : context.attitude_variance) {
+            variance += attitude_process * attitude_process;
+        }
+    } else {
+        for (double& variance : context.attitude_variance) {
+            variance += context.config.max_attitude_sigma_rad
+                * context.config.max_attitude_sigma_rad
+                * suite.dt_s;
+        }
     }
 
     if (!context.navigation_initialized) {
@@ -1039,9 +1574,16 @@ void update_navigation(
         context.navigation_initialized = true;
     } else {
         context.altitude += context.vertical_velocity * suite.dt_s;
+        context.altitude_variance +=
+            context.velocity_variance * suite.dt_s * suite.dt_s;
         if (voted.imu_valid) {
             context.vertical_velocity +=
                 voted.acceleration[0] * suite.dt_s;
+            const double velocity_process =
+                context.config.accelerometer_process_sigma_m_s2
+                * suite.dt_s;
+            context.velocity_variance +=
+                velocity_process * velocity_process;
         }
     }
 
@@ -1066,6 +1608,10 @@ void update_navigation(
         const double gnss_altitude = vector_norm(
             voted.gnss_position.data(), 3
         ) - context.gnss_radius_reference_m;
+        context.gnss_altitude_innovation =
+            gnss_altitude - context.altitude;
+        context.barometer_innovation =
+            voted.barometric_altitude - context.altitude;
         if (
             std::abs(voted.barometric_altitude - gnss_altitude)
             > context.config.cross_altitude_disagreement_m
@@ -1109,9 +1655,19 @@ void update_navigation(
             ? suite.dt_s
             : voted.barometer_sample_time_s
                 - context.last_barometer_sample_time_s;
-        context.altitude += filter_alpha(
+        const double alpha = filter_alpha(
             delta_s, context.config.altitude_filter_tau_s
-        ) * (voted.barometric_altitude - context.altitude);
+        );
+        context.barometer_innovation =
+            voted.barometric_altitude - context.altitude;
+        context.altitude += alpha * context.barometer_innovation;
+        const double measurement_variance =
+            context.config.barometer_sigma_m
+            * context.config.barometer_sigma_m;
+        context.altitude_variance =
+            (1.0 - alpha) * (1.0 - alpha)
+                * context.altitude_variance
+            + alpha * alpha * measurement_variance;
         context.last_barometer_sample_time_s =
             voted.barometer_sample_time_s;
     }
@@ -1123,37 +1679,189 @@ void update_navigation(
         const double delta_s = context.last_gnss_sample_time_s < 0.0
             ? suite.dt_s
             : voted.gnss_sample_time_s - context.last_gnss_sample_time_s;
-        context.vertical_velocity += filter_alpha(
+        const double alpha = filter_alpha(
             delta_s, context.config.velocity_filter_tau_s
-        ) * (voted.vertical_velocity - context.vertical_velocity);
+        );
+        context.gnss_velocity_innovation =
+            voted.vertical_velocity - context.vertical_velocity;
+        context.vertical_velocity +=
+            alpha * context.gnss_velocity_innovation;
+        const double measurement_variance =
+            context.config.gnss_velocity_sigma_m_s
+            * context.config.gnss_velocity_sigma_m_s;
+        context.velocity_variance =
+            (1.0 - alpha) * (1.0 - alpha)
+                * context.velocity_variance
+            + alpha * alpha * measurement_variance;
         context.last_gnss_sample_time_s = voted.gnss_sample_time_s;
     }
 
     context.navigation_status = use_barometer && use_gnss
         ? FSW_NAV_NOMINAL
         : (use_barometer || use_gnss ? FSW_NAV_DEGRADED : FSW_NAV_INERTIAL);
-    set_faults(context, suite, voted, navigation_disagreement);
+    set_faults(context, input, voted, navigation_disagreement);
+}
+
+bool discrete_asserted(
+    const FswDiscreteSample& sample,
+    double time_s,
+    double timeout_s
+) {
+    return fresh(
+        sample.valid, sample.sample_time_s, time_s, timeout_s
+    ) && sample.asserted;
+}
+
+void raise_fault(Context& context, uint32_t fault) {
+    commit_faults(context, context.active_fault_flags | fault);
+}
+
+uint32_t launch_inhibits(
+    const Context& context,
+    const FswInput& input,
+    const VotedSensors& voted
+) {
+    uint32_t inhibits = 0;
+    if (!voted.imu_valid) {
+        inhibits |= FSW_INHIBIT_IMU;
+    }
+    if (!context.attitude_valid) {
+        inhibits |= FSW_INHIBIT_ATTITUDE;
+    }
+    const bool propulsion_ready = fresh(
+        input.propulsion.valid,
+        input.propulsion.sample_time_s,
+        input.sensors.time_s,
+        context.config.imu_timeout_s
+    ) && input.propulsion.ready
+        && input.propulsion.health_percent
+            >= context.config.propulsion_abort_health_percent;
+    if (!propulsion_ready) {
+        inhibits |= FSW_INHIBIT_PROPULSION;
+    }
+    if (context.latched_fault_flags & critical_fault_mask()) {
+        inhibits |= FSW_INHIBIT_CRITICAL_FAULT;
+    }
+    if (
+        context.navigation_status == FSW_NAV_INERTIAL
+        || context.active_fault_flags & FSW_FAULT_NAV_UNCERTAINTY
+    ) {
+        inhibits |= FSW_INHIBIT_NAVIGATION;
+    }
+    if (
+        context.consecutive_overruns
+            >= context.config.overrun_abort_count
+        || context.active_fault_flags & FSW_FAULT_WATCHDOG
+    ) {
+        inhibits |= FSW_INHIBIT_TIMING;
+    }
+    return inhibits;
+}
+
+void process_command(
+    Context& context,
+    const FswInput& input,
+    const VotedSensors& voted
+) {
+    const auto& command = input.command;
+    if (command.type == FSW_COMMAND_NONE) {
+        return;
+    }
+    context.command_sequence = command.sequence;
+    context.command_type = command.type;
+    context.command_result = FSW_COMMAND_REJECTED_INVALID;
+    context.inhibit_flags = 0;
+    context.event_flags |= FSW_EVENT_COMMAND_PROCESSED;
+    if (
+        command.sequence <= context.last_command_sequence
+        || input.sensors.time_s - command.issue_time_s
+            > context.config.command_timeout_s
+    ) {
+        context.command_result = FSW_COMMAND_REJECTED_STALE;
+        return;
+    }
+    context.last_command_sequence = command.sequence;
+    switch (command.type) {
+        case FSW_COMMAND_ARM:
+            if (context.mode != FSW_MODE_SAFE) {
+                context.command_result =
+                    FSW_COMMAND_REJECTED_INVALID_STATE;
+                return;
+            }
+            context.inhibit_flags = launch_inhibits(
+                context, input, voted
+            ) & ~FSW_INHIBIT_NAVIGATION;
+            if (context.inhibit_flags != 0) {
+                context.command_result = FSW_COMMAND_REJECTED_INHIBITED;
+                return;
+            }
+            context.mode = FSW_MODE_ARMED;
+            context.command_result = FSW_COMMAND_ACCEPTED;
+            return;
+        case FSW_COMMAND_DISARM:
+            if (context.mode != FSW_MODE_ARMED) {
+                context.command_result =
+                    FSW_COMMAND_REJECTED_INVALID_STATE;
+                return;
+            }
+            context.mode = FSW_MODE_SAFE;
+            context.command_result = FSW_COMMAND_ACCEPTED;
+            return;
+        case FSW_COMMAND_LAUNCH:
+            if (context.mode != FSW_MODE_ARMED) {
+                context.command_result =
+                    FSW_COMMAND_REJECTED_INVALID_STATE;
+                return;
+            }
+            context.inhibit_flags = launch_inhibits(
+                context, input, voted
+            );
+            if (context.inhibit_flags != 0) {
+                context.command_result = FSW_COMMAND_REJECTED_INHIBITED;
+                return;
+            }
+            context.mode = FSW_MODE_IGNITION;
+            context.ignition_started_s = input.sensors.time_s;
+            context.stage1_ignite_request = true;
+            context.command_result = FSW_COMMAND_ACCEPTED;
+            return;
+        case FSW_COMMAND_ABORT:
+            if (context.mode == FSW_MODE_LANDED) {
+                context.command_result =
+                    FSW_COMMAND_REJECTED_INVALID_STATE;
+                return;
+            }
+            context.mode = FSW_MODE_ABORT;
+            context.command_result = FSW_COMMAND_ACCEPTED;
+            return;
+        case FSW_COMMAND_CLEAR_FAULTS:
+            if (context.mode != FSW_MODE_SAFE) {
+                context.command_result =
+                    FSW_COMMAND_REJECTED_INVALID_STATE;
+                return;
+            }
+            context.latched_fault_flags &= critical_fault_mask();
+            context.command_result = FSW_COMMAND_ACCEPTED;
+            return;
+        default:
+            return;
+    }
 }
 
 void update_integrated_mode(
     Context& context,
-    const FswSensorSuite& suite,
-    const VotedSensors& voted,
-    double ignition2,
-    double burnout2
+    const FswInput& input,
+    const VotedSensors& voted
 ) {
+    const auto& suite = input.sensors;
     switch (context.mode) {
         case FSW_MODE_SAFE:
-            context.mode = FSW_MODE_ARMED;
-            break;
         case FSW_MODE_ARMED:
-            if (suite.time_s >= 0.05 && context.attitude_valid) {
-                context.mode = FSW_MODE_IGNITION;
-            }
             break;
         case FSW_MODE_IGNITION:
             if (
                 context.attitude_valid
+                && input.propulsion.running
                 && persisted(
                     voted.acceleration[0] > 2.0,
                     suite.dt_s,
@@ -1162,6 +1870,13 @@ void update_integrated_mode(
                 )
             ) {
                 context.mode = FSW_MODE_BOOST_1;
+            } else if (
+                context.ignition_started_s >= 0.0
+                && suite.time_s - context.ignition_started_s
+                    > context.config.launch_confirm_timeout_s
+            ) {
+                raise_fault(context, FSW_FAULT_LAUNCH_NOT_CONFIRMED);
+                context.mode = FSW_MODE_ABORT;
             }
             break;
         case FSW_MODE_BOOST_1:
@@ -1176,20 +1891,78 @@ void update_integrated_mode(
                 )
             ) {
                 context.mode = FSW_MODE_SEPARATION;
+                context.separation_started_s = suite.time_s;
             }
             break;
         case FSW_MODE_SEPARATION:
-            if (suite.stage_separated) {
+            if (
+                discrete_asserted(
+                    input.discretes.stage_separated,
+                    suite.time_s,
+                    context.config.imu_timeout_s
+                )
+            ) {
                 context.mode = FSW_MODE_INTERSTAGE;
+                context.stage2_ignition_started_s = -1.0;
+            } else if (
+                context.separation_started_s >= 0.0
+                && suite.time_s - context.separation_started_s
+                    > context.config.separation_confirm_timeout_s
+            ) {
+                raise_fault(
+                    context, FSW_FAULT_SEPARATION_NOT_CONFIRMED
+                );
+                context.mode = FSW_MODE_ABORT;
             }
             break;
         case FSW_MODE_INTERSTAGE:
-            if (suite.time_s >= ignition2) {
+            if (
+                context.stage2_ignition_started_s < 0.0
+                && suite.time_s
+                    >= context.config.stage1_burn_s
+                        + context.config.separation_delay_s
+                        + context.config.stage2_ignition_delay_s
+            ) {
+                context.inhibit_flags = launch_inhibits(
+                    context, input, voted
+                );
+                if (
+                    !discrete_asserted(
+                        input.discretes.stage_separated,
+                        suite.time_s,
+                        context.config.imu_timeout_s
+                    )
+                ) {
+                    context.inhibit_flags |= FSW_INHIBIT_SEPARATION;
+                }
+                if (context.inhibit_flags == 0) {
+                    context.stage2_ignite_request = true;
+                    context.stage2_ignition_started_s = suite.time_s;
+                }
+            }
+            if (
+                context.stage2_ignition_started_s >= 0.0
+                && input.propulsion.running
+            ) {
                 context.mode = FSW_MODE_BOOST_2;
+            } else if (
+                suite.time_s
+                    > context.config.stage1_burn_s
+                        + context.config.separation_delay_s
+                        + context.config.stage2_ignition_delay_s
+                        + context.config.stage2_ignition_timeout_s
+            ) {
+                raise_fault(context, FSW_FAULT_STAGE2_IGNITION);
+                context.mode = FSW_MODE_ABORT;
             }
             break;
         case FSW_MODE_BOOST_2:
-            if (suite.time_s >= burnout2) {
+            if (
+                context.stage2_ignition_started_s >= 0.0
+                && suite.time_s
+                    >= context.stage2_ignition_started_s
+                        + context.config.stage2_burn_s
+            ) {
                 context.mode = FSW_MODE_COAST;
             }
             break;
@@ -1200,13 +1973,10 @@ void update_integrated_mode(
 
 void update_mode(
     Context& context,
-    const FswSensorSuite& suite,
+    const FswInput& input,
     const VotedSensors& voted
 ) {
-    if (suite.engine_health_percent <= 0.0) {
-        context.mode = FSW_MODE_ABORT;
-        return;
-    }
+    const auto& suite = input.sensors;
     const bool powered = context.mode == FSW_MODE_IGNITION
         || context.mode == FSW_MODE_BOOST_1
         || context.mode == FSW_MODE_BOOST_2;
@@ -1219,36 +1989,55 @@ void update_mode(
         context.mode = FSW_MODE_ABORT;
         return;
     }
-
-    const double separation = context.config.stage1_burn_s
-        + context.config.separation_delay_s;
-    const double ignition2 = separation
-        + context.config.stage2_ignition_delay_s;
-    const double burnout2 = ignition2 + context.config.stage2_burn_s;
+    if (persisted(
+        powered
+            && (
+                !input.propulsion.valid
+                || input.propulsion.health_percent
+                    < context.config.propulsion_abort_health_percent
+            ),
+        suite.dt_s,
+        context.config.propulsion_abort_persistence_s,
+        context.propulsion_loss_evidence_s
+    )) {
+        context.mode = FSW_MODE_ABORT;
+        return;
+    }
+    if (
+        powered
+        && (
+            context.active_fault_flags
+                & (
+                    FSW_FAULT_WATCHDOG
+                    | FSW_FAULT_LAUNCH_NOT_CONFIRMED
+                    | FSW_FAULT_STAGE2_IGNITION
+                )
+            || context.consecutive_overruns
+                >= context.config.overrun_abort_count
+        )
+    ) {
+        context.mode = FSW_MODE_ABORT;
+        return;
+    }
 
     switch (context.config.body_role) {
         case FSW_BODY_CORE:
-            if (suite.stage_separated && context.mode < FSW_MODE_COAST) {
+            if (
+                discrete_asserted(
+                    input.discretes.stage_separated,
+                    suite.time_s,
+                    context.config.imu_timeout_s
+                )
+                && context.mode < FSW_MODE_COAST
+            ) {
                 context.mode = FSW_MODE_COAST;
             }
             break;
         case FSW_BODY_UPPER:
-            if (
-                context.mode == FSW_MODE_INTERSTAGE
-                && suite.time_s >= ignition2
-            ) {
-                context.mode = FSW_MODE_BOOST_2;
-            } else if (
-                context.mode == FSW_MODE_BOOST_2
-                && suite.time_s >= burnout2
-            ) {
-                context.mode = FSW_MODE_COAST;
-            }
+            update_integrated_mode(context, input, voted);
             break;
         case FSW_BODY_INTEGRATED:
-            update_integrated_mode(
-                context, suite, voted, ignition2, burnout2
-            );
+            update_integrated_mode(context, input, voted);
             break;
         default:
             break;
@@ -1277,7 +2066,21 @@ void update_mode(
     }
     if (context.apogee_seen && !context.drogue_deployed) {
         context.mode = FSW_MODE_DROGUE;
-        context.drogue_deployed = true;
+        if (context.drogue_commanded_s < 0.0) {
+            context.drogue_commanded_s = suite.time_s;
+        }
+        context.drogue_deployed = discrete_asserted(
+            input.discretes.drogue_deployed,
+            suite.time_s,
+            context.config.imu_timeout_s
+        );
+        if (
+            !context.drogue_deployed
+            && suite.time_s - context.drogue_commanded_s
+                > context.config.drogue_confirm_timeout_s
+        ) {
+            raise_fault(context, FSW_FAULT_DROGUE_NOT_CONFIRMED);
+        }
     }
     if (
         altitude_aided
@@ -1286,7 +2089,21 @@ void update_mode(
         && context.altitude <= context.config.main_deploy_altitude_m
     ) {
         context.mode = FSW_MODE_MAIN;
-        context.main_deployed = true;
+        if (context.main_commanded_s < 0.0) {
+            context.main_commanded_s = suite.time_s;
+        }
+        context.main_deployed = discrete_asserted(
+            input.discretes.main_deployed,
+            suite.time_s,
+            context.config.imu_timeout_s
+        );
+        if (
+            !context.main_deployed
+            && suite.time_s - context.main_commanded_s
+                > context.config.main_confirm_timeout_s
+        ) {
+            raise_fault(context, FSW_FAULT_MAIN_NOT_CONFIRMED);
+        }
     }
     if (
         altitude_aided
@@ -1330,9 +2147,10 @@ FswGuidancePoint guidance_at(const FswConfig& config, double time_s) {
 
 void calculate_controls(
     const Context& context,
-    const FswSensorSuite& suite,
+    const FswInput& input,
     FswOutput& output
 ) {
+    const auto& suite = input.sensors;
     if (
         !context.attitude_valid
         || (
@@ -1360,9 +2178,17 @@ void calculate_controls(
     const double roll_effort =
         context.config.control_kp * roll_error
         - context.config.control_kd * context.last_gyro[0];
-    const double aero_blend = clamp(
-        suite.dynamic_pressure_pa / 35'000.0, 0.0, 1.0
+    const bool air_data_valid = fresh(
+        input.air_data.valid,
+        input.air_data.sample_time_s,
+        suite.time_s,
+        context.config.imu_timeout_s
     );
+    const double aero_blend = air_data_valid
+        ? clamp(
+            input.air_data.dynamic_pressure_pa / 35'000.0, 0.0, 1.0
+        )
+        : 0.0;
     output.tvc_pitch_rad = clamp(
         pitch_effort * (1.0 - 0.65 * aero_blend),
         -context.config.max_tvc_rad,
@@ -1391,12 +2217,23 @@ void calculate_controls(
 }
 
 void populate_output(const Context& context, FswOutput& output) {
+    output.abi_version = FSW_ABI_VERSION;
+    output.struct_size = sizeof(FswOutput);
+    output.output_valid = 1;
+    output.step_status = FSW_STATUS_OK;
     output.mode = context.mode;
     output.navigation_status = context.navigation_status;
-    output.deploy_drogue = context.drogue_deployed;
-    output.deploy_main = context.main_deployed;
+    output.stage1_ignite = context.stage1_ignite_request;
+    output.stage2_ignite = context.stage2_ignite_request;
+    output.deploy_drogue = context.drogue_commanded_s >= 0.0;
+    output.deploy_main = context.main_commanded_s >= 0.0;
     output.abort = context.mode == FSW_MODE_ABORT;
     output.attitude_valid = context.attitude_valid;
+    output.command_sequence = context.command_sequence;
+    output.command_type = context.command_type;
+    output.command_result = context.command_result;
+    output.inhibit_flags = context.inhibit_flags;
+    output.event_flags = context.event_flags;
     output.imu_usable_mask = context.imu_usable_mask;
     output.barometer_usable_mask = context.barometer_usable_mask;
     output.gnss_usable_mask = context.gnss_usable_mask;
@@ -1405,20 +2242,60 @@ void populate_output(const Context& context, FswOutput& output) {
     output.gnss_rejected_mask = context.gnss_rejected_mask;
     output.disagreement_flags = context.disagreement_flags;
     output.sensor_status_flags = context.sensor_status_flags;
+    for (int index = 0; index < FSW_MAX_SENSOR_CHANNELS; ++index) {
+        output.imu_health_flags[index] =
+            context.imu_health[index].flags;
+        output.barometer_health_flags[index] =
+            context.barometer_health[index].flags;
+        output.gnss_health_flags[index] =
+            context.gnss_health[index].flags;
+        output.imu_age_s[index] = context.imu_health[index].age_s;
+        output.barometer_age_s[index] =
+            context.barometer_health[index].age_s;
+        output.gnss_age_s[index] = context.gnss_health[index].age_s;
+    }
     output.estimated_altitude_m = context.altitude;
     output.estimated_vertical_velocity_m_s = context.vertical_velocity;
+    output.altitude_sigma_m = std::sqrt(
+        std::max(context.altitude_variance, 0.0)
+    );
+    output.vertical_velocity_sigma_m_s = std::sqrt(
+        std::max(context.velocity_variance, 0.0)
+    );
+    output.barometer_innovation_m = context.barometer_innovation;
+    output.gnss_altitude_innovation_m =
+        context.gnss_altitude_innovation;
+    output.gnss_velocity_innovation_m_s =
+        context.gnss_velocity_innovation;
     for (int index = 0; index < 4; ++index) {
         output.estimated_attitude_wxyz[index] = context.attitude[index];
     }
     for (int index = 0; index < 3; ++index) {
         output.gyro_bias_rad_s[index] = context.gyro_bias[index];
+        output.attitude_sigma_rad[index] = std::sqrt(
+            std::max(context.attitude_variance[index], 0.0)
+        );
     }
-    output.fault_flags = context.fault_flags;
+    output.active_fault_flags = context.active_fault_flags;
+    output.latched_fault_flags = context.latched_fault_flags;
+    output.changed_fault_flags = context.changed_fault_flags;
+    for (uint32_t index = 0; index < FSW_FAULT_COUNT; ++index) {
+        output.fault_occurrence_count[index] =
+            context.fault_occurrence_count[index];
+    }
+    output.highest_fault_severity = context.highest_fault_severity;
+    output.previous_execution_time_s =
+        context.previous_execution_time_s;
+    output.consecutive_overruns = context.consecutive_overruns;
 }
 
 }  // namespace
 
 extern "C" {
+
+uint32_t fsw_abi_version(void) {
+    return FSW_ABI_VERSION;
+}
 
 FswHandle fsw_create(const FswConfig* config) {
     if (config == nullptr || !valid_config(*config)) {
@@ -1435,36 +2312,60 @@ void fsw_reset(FswHandle handle) {
 
 int32_t fsw_step(
     FswHandle handle,
-    const FswSensorSuite* sensor,
+    const FswInput* input,
     FswOutput* output
 ) {
-    if (handle == nullptr || sensor == nullptr || output == nullptr) {
+    if (output == nullptr) {
         return FSW_STATUS_INVALID_ARGUMENT;
     }
     *output = {};
+    output->abi_version = FSW_ABI_VERSION;
+    output->struct_size = sizeof(FswOutput);
+    output->output_valid = 0;
+    output->step_status = FSW_STATUS_INVALID_ARGUMENT;
+    if (handle == nullptr || input == nullptr) {
+        return FSW_STATUS_INVALID_ARGUMENT;
+    }
     auto& context = *static_cast<Context*>(handle);
     if (
-        !valid_sample(*sensor)
+        input->abi_version != FSW_ABI_VERSION
+        || input->struct_size != sizeof(FswInput)
+    ) {
+        output->step_status = FSW_STATUS_ABI_MISMATCH;
+        return FSW_STATUS_ABI_MISMATCH;
+    }
+    const auto& sensor = input->sensors;
+    if (
+        !valid_input(*input, context.config)
         || (
             context.time_initialized
-            && sensor->time_s <= context.last_time_s + kEpsilon
+            && sensor.time_s <= context.last_time_s + kEpsilon
         )
     ) {
-        return FSW_STATUS_INVALID_SAMPLE;
+        output->step_status = FSW_STATUS_INVALID_INPUT;
+        return FSW_STATUS_INVALID_INPUT;
     }
 
-    const VotedSensors voted = vote_sensors(context, *sensor);
-    update_navigation(context, *sensor, voted);
-    update_mode(context, *sensor, voted);
+    context.event_flags = 0;
+    context.changed_fault_flags = 0;
+    context.stage1_ignite_request = false;
+    context.stage2_ignite_request = false;
+    context.previous_mode = context.mode;
+    const VotedSensors voted = vote_sensors(context, sensor);
+    update_navigation(context, *input, voted);
+    process_command(context, *input, voted);
+    update_mode(context, *input, voted);
+    if (context.mode != context.previous_mode) {
+        context.event_flags |= FSW_EVENT_STATE_CHANGED;
+    }
     context.time_initialized = true;
-    context.last_time_s = sensor->time_s;
+    context.last_time_s = sensor.time_s;
     populate_output(context, *output);
     output->stage_separate =
         context.mode == FSW_MODE_SEPARATION
-        && sensor->time_s >= context.config.stage1_burn_s
+        && sensor.time_s >= context.config.stage1_burn_s
             + context.config.separation_delay_s;
-    output->stage2_ignite = context.mode == FSW_MODE_BOOST_2;
-    calculate_controls(context, *sensor, *output);
+    calculate_controls(context, *input, *output);
     return FSW_STATUS_OK;
 }
 
@@ -1473,7 +2374,7 @@ void fsw_destroy(FswHandle handle) {
 }
 
 const char* fsw_version(void) {
-    return "fsw-core-0.3.0";
+    return "fsw-core-0.4.0";
 }
 
 }  // extern "C"

@@ -227,6 +227,7 @@
     ]
   },
   "sensors": {
+    "channel_count": 3,
     "imu_rate_hz": 200.0,
     "barometer_rate_hz": 50.0,
     "gnss_rate_hz": 10.0,

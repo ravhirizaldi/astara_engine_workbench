@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import gzip
+import itertools
 from pathlib import Path
 
 from .flight_core import (
@@ -36,6 +37,16 @@ REPLAY_FIELDS = (
     "fin_pitch_rad",
     "fin_yaw_rad",
     "fault_flags",
+    "active_fault_flags",
+    "latched_fault_flags",
+    "highest_fault_severity",
+    "altitude_sigma_m",
+    "vertical_velocity_sigma_m_s",
+    "command_sequence",
+    "command_type",
+    "command_result",
+    "inhibit_flags",
+    "command_source",
     "faults",
 )
 
@@ -58,6 +69,18 @@ def replay_fsw(
         "core_stage": FSW_BODY_CORE,
         "upper_stage": FSW_BODY_UPPER,
     }
+    command_path = sensor_path.with_name("commands.csv")
+    recorded_commands: dict[tuple[str, float], int] = {}
+    if command_path.exists():
+        with command_path.open(newline="", encoding="utf-8") as command_file:
+            for command_row in csv.DictReader(command_file):
+                recorded_commands[
+                    (
+                        command_row["body"],
+                        round(float(command_row["time_s"]), 9),
+                    )
+                ] = int(command_row["command_type"])
+    command_source = "recorded" if recorded_commands else "legacy_synthesized"
     cores: dict[str, FlightCore] = {}
     try:
         source_file = (
@@ -72,7 +95,16 @@ def replay_fsw(
             reader = csv.DictReader(source)
             writer = csv.DictWriter(destination, fieldnames=REPLAY_FIELDS)
             writer.writeheader()
-            for row in reader:
+            grouped_rows = itertools.groupby(
+                reader,
+                key=lambda item: (
+                    item.get("body", ""),
+                    round(float(item["time_s"]), 9),
+                ),
+            )
+            for _, row_group in grouped_rows:
+                rows = list(row_group)
+                row = rows[0]
                 body = row.get("body", "")
                 if body not in roles:
                     raise ValueError(f"unknown replay body {body!r}")
@@ -81,9 +113,31 @@ def replay_fsw(
                     if body == "upper_stage" and "integrated_stack" in cores:
                         core = cores.pop("integrated_stack")
                     else:
-                        core = FlightCore(scenario, roles[body])
+                        core = FlightCore(
+                            scenario,
+                            roles[body],
+                            auto_commands=not bool(recorded_commands),
+                        )
                     cores[body] = core
-                result = core.step(sensor_frame_from_row(row))
+                frames = [
+                    sensor_frame_from_row(channel_row)
+                    for channel_row in sorted(
+                        rows, key=lambda item: int(item.get("channel", 0))
+                    )
+                ]
+                frame = frames[0]
+                result = core.step(
+                    frame,
+                    command_type=(
+                        recorded_commands.get(
+                            (body, round(float(row["time_s"]), 9)),
+                            0,
+                        )
+                        if recorded_commands
+                        else None
+                    ),
+                    sensor_channels=frames[1:],
+                )
                 writer.writerow(
                     {
                         "body": body,
@@ -106,8 +160,28 @@ def replay_fsw(
                         "fin_roll_rad": result.fin_roll_rad,
                         "fin_pitch_rad": result.fin_pitch_rad,
                         "fin_yaw_rad": result.fin_yaw_rad,
-                        "fault_flags": result.fault_flags,
-                        "faults": decode_faults(result.fault_flags),
+                        "fault_flags": int(
+                            result.active_fault_flags
+                            | result.latched_fault_flags
+                        ),
+                        "active_fault_flags": result.active_fault_flags,
+                        "latched_fault_flags": result.latched_fault_flags,
+                        "highest_fault_severity": (
+                            result.highest_fault_severity
+                        ),
+                        "altitude_sigma_m": result.altitude_sigma_m,
+                        "vertical_velocity_sigma_m_s": (
+                            result.vertical_velocity_sigma_m_s
+                        ),
+                        "command_sequence": result.command_sequence,
+                        "command_type": result.command_type,
+                        "command_result": result.command_result,
+                        "inhibit_flags": result.inhibit_flags,
+                        "command_source": command_source,
+                        "faults": decode_faults(
+                            result.active_fault_flags
+                            | result.latched_fault_flags
+                        ),
                     }
                 )
     finally:

@@ -85,7 +85,7 @@ Each mission creates a unique `runs/` directory containing:
 - `scenario.json` and a SHA-256 scenario identity
 - `vehicle_definition.json` as the self-contained stable vehicle snapshot
 - `manifest.json` with model version, seed, frames, checks, and artifact hashes
-- `truth.csv`, `sensors.csv.gz`, `fsw.csv`, and `events.csv`
+- `truth.csv`, `sensors.csv.gz`, `commands.csv`, `fsw.csv`, and `events.csv`
 - `rocketpy_reference.json` with an optional independent powered-ascent comparison
 - `report.pdf` and analysis PNGs
 
@@ -107,8 +107,8 @@ successful telemetry retention with `--telemetry-percent`.
 
 The C++ flight core receives simulated sensor data only. It has no serial,
 network, GPIO, ignition, valve, pyrotechnic, or flight-termination interfaces.
-Its public C ABI is intentionally product-neutral: `FswConfig`,
-`FswSensorSuite`, `FswOutput`, `FSW_MODE_*`, and `fsw_*`. ASTARA remains the
+Its public C ABI is intentionally product-neutral: `FswConfig`, `FswInput`,
+`FswOutput`, `FSW_MODE_*`, and `fsw_*`. ASTARA remains the
 company/workbench name, not the controller namespace.
 
 Replay a recorded sensor stream through the same C++ flight core:
@@ -118,17 +118,21 @@ python3 -m astara replay runs/<run>/sensors.csv.gz
 ```
 
 The controller consumes the complete mission attitude schedule with piecewise
-pitch and launch-relative azimuth interpolation. Its v0.3 ABI accepts up to
-three timestamped IMU, barometer, and GNSS channels, performs deterministic
-voting with debounced rejection/recovery, and reports channel masks plus
-disagreement faults. Existing single-sensor logs remain replayable through the
-Python bridge. The upper stage keeps the integrated-stack controller state
+pitch and launch-relative azimuth interpolation. Its v0.4 ABI accepts typed
+sensor, air-data, propulsion, discrete-feedback, command, and platform-timing
+inputs. It votes up to three timestamped IMU, barometer, and GNSS channels,
+performs deterministic rejection/recovery, and reports channel health,
+uncertainty, command inhibits, timing, and active/latched faults. Existing
+single-sensor logs remain replayable through the Python bridge. Recorded
+commands replay from `commands.csv`; older runs use the legacy deterministic
+launch schedule. The upper stage keeps the integrated-stack controller state
 through separation.
 
 Current controller limitations remain explicit:
 
-- attitude estimation is gyro-integrated and has no calibrated AHRS correction;
-- uncertainty/covariance estimation and redundant sensor emulation are absent;
+- attitude estimation remains launch-frame gyro integration without a calibrated
+  absolute AHRS correction;
+- uncertainty is a bounded diagonal estimate, not a validated navigation filter;
 - the C ABI is loaded in-process with `ctypes`, without transport fault testing;
 - timing/memory budgets, cross-platform baselines, HIL evidence, and controller
   gain validation against physical data remain future verification work.

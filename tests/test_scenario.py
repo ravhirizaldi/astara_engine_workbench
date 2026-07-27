@@ -54,6 +54,17 @@ class ScenarioTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "time_step_s"):
             validate_scenario(scenario)
 
+    def test_rejects_invalid_fsw_command_and_channel_count(self) -> None:
+        scenario = default_scenario()
+        scenario["mission"]["commands"][1]["time_s"] = 0.0
+        with self.assertRaisesRegex(ValueError, "commands times"):
+            validate_scenario(scenario)
+
+        scenario = default_scenario()
+        scenario["sensors"]["channel_count"] = 4
+        with self.assertRaisesRegex(ValueError, "channel_count"):
+            validate_scenario(scenario)
+
     def test_rejects_invalid_telemetry_retention_percent(self) -> None:
         scenario = default_scenario()
         scenario["monte_carlo"]["telemetry_sample_percent"] = 101.0
