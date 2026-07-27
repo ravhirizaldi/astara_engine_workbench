@@ -4,6 +4,7 @@ import numpy as np
 
 from astara.math3d import (
     cross3,
+    ecef_to_geodetic,
     ecef_to_ned,
     geodetic_to_ecef,
     initial_attitude,
@@ -26,6 +27,10 @@ class Math3dTests(unittest.TestCase):
 
     def test_ned_round_trip(self) -> None:
         position = geodetic_to_ecef(-6.2, 106.8, 50.0)
+        latitude, longitude, altitude = ecef_to_geodetic(position)
+        self.assertAlmostEqual(latitude, -6.2)
+        self.assertAlmostEqual(longitude, 106.8)
+        self.assertAlmostEqual(altitude, 50.0, places=6)
         vector = np.array([10.0, -4.0, 2.0])
         np.testing.assert_allclose(
             ecef_to_ned(ned_to_ecef(vector, position), position),

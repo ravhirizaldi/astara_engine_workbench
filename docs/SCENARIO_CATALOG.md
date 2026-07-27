@@ -7,6 +7,8 @@
 | AST-SCN-003 | Symmetric multi-engine cutoff | `tests.test_twin.TwinTests.test_multi_engine_telemetry_and_engine_cutoff` |
 | AST-SCN-004 | Operator cancellation | `tests.test_twin.TwinTests.test_stream_can_cancel_without_waiting_for_batch_result` |
 | AST-SCN-005 | Recorded sensor replay | `tests.test_replay.ReplayTests.test_sensor_log_replays_deterministically` |
+| AST-SCN-006 | GNSS dropout and degraded navigation | `tests.test_twin.TwinTests.test_short_two_stage_run_is_finite_and_reproducible` |
+| AST-SCN-007 | Upper-stage estimator continuity at separation | `tests.test_twin.TwinTests.test_short_two_stage_run_is_finite_and_reproducible` |
 
 Fault variants remain code-generated until a scenario requires independent
 configuration ownership. This avoids duplicated JSON while the schema evolves.

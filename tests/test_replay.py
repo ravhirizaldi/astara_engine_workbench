@@ -7,6 +7,7 @@ from pathlib import Path
 from astara.flight_core import (
     SENSOR_CSV_FIELDS,
     SensorFrame,
+    sensor_frame_from_row,
     sensor_frame_to_row,
 )
 from astara.replay import replay_fsw
@@ -40,6 +41,8 @@ class ReplayTests(unittest.TestCase):
                         1,
                         1,
                         0,
+                        index * 0.005,
+                        index * 0.005,
                     )
                     writer.writerow(sensor_frame_to_row("integrated_stack", frame))
 
@@ -51,6 +54,33 @@ class ReplayTests(unittest.TestCase):
                 rows = list(csv.DictReader(file))
             self.assertEqual(len(rows), 40)
             self.assertEqual(rows[-1]["mode"], "BOOST_1")
+
+    def test_old_sensor_rows_default_sample_times_to_frame_time(self) -> None:
+        vector = SensorFrame._fields_[2][1]
+        frame = SensorFrame(
+            1.5,
+            0.005,
+            vector(10.0, 0.0, 0.0),
+            vector(0.0, 0.0, 0.0),
+            vector(1.0, 0.0, 0.0),
+            10.0,
+            vector(6_378_137.0, 0.0, 0.0),
+            vector(20.0, 0.0, 0.0),
+            20.0,
+            100.0,
+            100.0,
+            1,
+            1,
+            0,
+            1.4,
+            1.4,
+        )
+        row = sensor_frame_to_row("integrated_stack", frame)
+        row.pop("barometer_sample_time_s")
+        row.pop("gnss_sample_time_s")
+        restored = sensor_frame_from_row(row)
+        self.assertEqual(restored.barometer_sample_time_s, 1.5)
+        self.assertEqual(restored.gnss_sample_time_s, 1.5)
 
 
 if __name__ == "__main__":

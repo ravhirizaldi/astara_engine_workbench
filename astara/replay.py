@@ -1,4 +1,4 @@
-"""Replay recorded sensor frames through ASTARA Flight Core."""
+"""Replay recorded sensor frames through the generic flight core."""
 
 from __future__ import annotations
 
@@ -6,13 +6,23 @@ import csv
 import gzip
 from pathlib import Path
 
-from .flight_core import MODE_NAMES, FlightCore, sensor_frame_from_row
+from .flight_core import (
+    FSW_BODY_CORE,
+    FSW_BODY_INTEGRATED,
+    FSW_BODY_UPPER,
+    MODE_NAMES,
+    NAVIGATION_STATUS_NAMES,
+    FlightCore,
+    decode_faults,
+    sensor_frame_from_row,
+)
 from .scenario import validate_scenario
 
 REPLAY_FIELDS = (
     "body",
     "time_s",
     "mode",
+    "navigation_status",
     "stage_separate",
     "stage2_ignite",
     "deploy_drogue",
@@ -26,6 +36,7 @@ REPLAY_FIELDS = (
     "fin_pitch_rad",
     "fin_yaw_rad",
     "fault_flags",
+    "faults",
 )
 
 
@@ -42,7 +53,11 @@ def replay_fsw(
     if output_path.resolve() == sensor_path.resolve():
         raise ValueError("replay output must differ from sensor log")
 
-    roles = {"integrated_stack": 0, "core_stage": 1, "upper_stage": 2}
+    roles = {
+        "integrated_stack": FSW_BODY_INTEGRATED,
+        "core_stage": FSW_BODY_CORE,
+        "upper_stage": FSW_BODY_UPPER,
+    }
     cores: dict[str, FlightCore] = {}
     try:
         source_file = (
@@ -63,13 +78,20 @@ def replay_fsw(
                     raise ValueError(f"unknown replay body {body!r}")
                 core = cores.get(body)
                 if core is None:
-                    core = cores[body] = FlightCore(scenario, roles[body])
+                    if body == "upper_stage" and "integrated_stack" in cores:
+                        core = cores.pop("integrated_stack")
+                    else:
+                        core = FlightCore(scenario, roles[body])
+                    cores[body] = core
                 result = core.step(sensor_frame_from_row(row))
                 writer.writerow(
                     {
                         "body": body,
                         "time_s": row["time_s"],
                         "mode": MODE_NAMES[result.mode],
+                        "navigation_status": NAVIGATION_STATUS_NAMES[
+                            result.navigation_status
+                        ],
                         "stage_separate": result.stage_separate,
                         "stage2_ignite": result.stage2_ignite,
                         "deploy_drogue": result.deploy_drogue,
@@ -85,6 +107,7 @@ def replay_fsw(
                         "fin_pitch_rad": result.fin_pitch_rad,
                         "fin_yaw_rad": result.fin_yaw_rad,
                         "fault_flags": result.fault_flags,
+                        "faults": decode_faults(result.fault_flags),
                     }
                 )
     finally:

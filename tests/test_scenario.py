@@ -54,6 +54,12 @@ class ScenarioTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "time_step_s"):
             validate_scenario(scenario)
 
+    def test_rejects_invalid_telemetry_retention_percent(self) -> None:
+        scenario = default_scenario()
+        scenario["monte_carlo"]["telemetry_sample_percent"] = 101.0
+        with self.assertRaisesRegex(ValueError, "telemetry_sample_percent"):
+            validate_scenario(scenario)
+
     def test_rejects_truth_step_slower_than_flight_software(self) -> None:
         scenario = default_scenario()
         scenario["simulation"]["time_step_s"] = 0.01

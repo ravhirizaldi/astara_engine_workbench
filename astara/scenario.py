@@ -99,8 +99,8 @@ def model_source_hash() -> str:
     paths = sorted((root / "astara").glob("*.py"))
     paths.extend(
         (
-            root / "flight_core" / "include" / "astara_fsw.h",
-            root / "flight_core" / "src" / "astara_fsw.cpp",
+            root / "flight_core" / "include" / "fsw.h",
+            root / "flight_core" / "src" / "fsw.cpp",
         )
     )
     digest = hashlib.sha256()
@@ -288,6 +288,16 @@ def validate_scenario(scenario: dict[str, Any]) -> None:
         or monte_carlo["seed"] < 0
     ):
         raise ValueError("monte_carlo.seed must be a nonnegative integer")
+    telemetry_sample_percent = monte_carlo.get(
+        "telemetry_sample_percent", 2.0
+    )
+    if (
+        not isinstance(telemetry_sample_percent, (int, float))
+        or not 0.0 <= telemetry_sample_percent <= 100.0
+    ):
+        raise ValueError(
+            "monte_carlo.telemetry_sample_percent must be between 0 and 100"
+        )
     environment = scenario.get("environment", {})
     latitude = environment.get("latitude_deg")
     longitude = environment.get("longitude_deg")
@@ -439,8 +449,22 @@ def validate_scenario(scenario: dict[str, Any]) -> None:
             ("separation_delay_s", "stage2_ignition_delay_s"),
             "mission",
         )
-    if not isinstance(mission.get("attitude_schedule"), list) or len(mission["attitude_schedule"]) < 2:
-        raise ValueError("mission.attitude_schedule requires at least two points")
+    schedule = mission.get("attitude_schedule")
+    if not isinstance(schedule, list) or not 2 <= len(schedule) <= 32:
+        raise ValueError("mission.attitude_schedule requires 2 to 32 points")
+    previous_time = None
+    for index, point in enumerate(schedule):
+        if not isinstance(point, dict):
+            raise ValueError(f"mission.attitude_schedule[{index}] must be an object")
+        for name in ("time_s", "pitch_deg", "azimuth_deg"):
+            value = point.get(name)
+            if not isinstance(value, (int, float)) or not math.isfinite(value):
+                raise ValueError(
+                    f"mission.attitude_schedule[{index}].{name} must be finite"
+                )
+        if previous_time is not None and point["time_s"] <= previous_time:
+            raise ValueError("mission.attitude_schedule times must strictly increase")
+        previous_time = point["time_s"]
 
     actuators = scenario.get("actuators", {})
     _positive(
@@ -451,6 +475,14 @@ def validate_scenario(scenario: dict[str, Any]) -> None:
 
     sensors = scenario.get("sensors", {})
     _positive(sensors, ("imu_rate_hz", "barometer_rate_hz", "gnss_rate_hz"), "sensors")
+    for name in (
+        "barometer_timeout_s",
+        "gnss_timeout_s",
+        "altitude_filter_tau_s",
+        "velocity_filter_tau_s",
+    ):
+        if name in sensors:
+            _positive(sensors, (name,), "sensors")
     for name in (
         "accelerometer_noise_m_s2",
         "gyro_noise_rad_s",

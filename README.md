@@ -76,7 +76,8 @@ Run the reference mission without the GUI:
 python3 -m astara validate
 python3 -m astara build-fsw
 python3 -m astara simulate scenarios/anthariksa_reference_mission.json --seed 1
-python3 -m astara analyze scenarios/anthariksa_reference_mission.json --samples 20 --seed 1
+python3 -m astara analyze scenarios/anthariksa_reference_mission.json \
+  --samples 20 --seed 1
 ```
 
 Each mission creates a unique `runs/` directory containing:
@@ -91,18 +92,46 @@ Each mission creates a unique `runs/` directory containing:
 The `analyze` command creates a separate credibility bundle containing:
 
 - `convergence.csv` for `dt`, `dt/2`, and `dt/4`
-- `monte_carlo.csv` with every sampled input factor and result
-- `summary.json` with P5/median/P95 ranges, provenance, and convergence status
+- `monte_carlo.csv` with every sampled factor, seed, status, failure reason,
+  max Q, max Mach, apogee, burnout times, and both impact points
+- `retained_runs/` with full telemetry for every failure plus a deterministic
+  2% sample of successful runs
+- `summary.json` with P5/median/P95 ranges, provenance, worker usage, retention
+  counts, and convergence status
 - the exact scenario plus SHA-256 artifact identities
+
+Monte Carlo samples run in independent processes. Automatic worker selection
+uses process CPU affinity and reserves 25% of logical CPUs for the system: an
+8-core allocation uses 6 workers. Override this with `--workers`, or change
+successful telemetry retention with `--telemetry-percent`.
 
 The C++ flight core receives simulated sensor data only. It has no serial,
 network, GPIO, ignition, valve, pyrotechnic, or flight-termination interfaces.
+Its public C ABI is intentionally product-neutral: `FswConfig`,
+`FswSensorSuite`, `FswOutput`, `FSW_MODE_*`, and `fsw_*`. ASTARA remains the
+company/workbench name, not the controller namespace.
 
 Replay a recorded sensor stream through the same C++ flight core:
 
 ```bash
 python3 -m astara replay runs/<run>/sensors.csv.gz
 ```
+
+The controller consumes the complete mission attitude schedule with piecewise
+pitch and launch-relative azimuth interpolation. Its v0.3 ABI accepts up to
+three timestamped IMU, barometer, and GNSS channels, performs deterministic
+voting with debounced rejection/recovery, and reports channel masks plus
+disagreement faults. Existing single-sensor logs remain replayable through the
+Python bridge. The upper stage keeps the integrated-stack controller state
+through separation.
+
+Current controller limitations remain explicit:
+
+- attitude estimation is gyro-integrated and has no calibrated AHRS correction;
+- uncertainty/covariance estimation and redundant sensor emulation are absent;
+- the C ABI is loaded in-process with `ctypes`, without transport fault testing;
+- timing/memory budgets, cross-platform baselines, HIL evidence, and controller
+  gain validation against physical data remain future verification work.
 
 See `docs/REQUIREMENTS.md` for requirement-to-test links,
 `docs/SCENARIO_CATALOG.md` for current qualification cases, and

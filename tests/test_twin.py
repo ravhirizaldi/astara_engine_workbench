@@ -145,6 +145,31 @@ class TwinTests(unittest.TestCase):
                 )
             )
             self.assertTrue(
+                any(
+                    row["body"] == "upper_stage"
+                    and row["navigation_status"] in ("DEGRADED", "INERTIAL")
+                    for row in first.fsw_telemetry
+                )
+            )
+            before_separation = [
+                row for row in first.fsw_telemetry
+                if row["body"] == "integrated_stack"
+            ][-1]
+            after_separation = next(
+                row for row in first.fsw_telemetry
+                if row["body"] == "upper_stage"
+            )
+            attitude_jump = math.sqrt(
+                sum(
+                    (
+                        float(before_separation[f"estimated_attitude_{axis}"])
+                        - float(after_separation[f"estimated_attitude_{axis}"])
+                    ) ** 2
+                    for axis in "wxyz"
+                )
+            )
+            self.assertLess(attitude_jump, 0.005)
+            self.assertTrue(
                 all(
                     math.isfinite(float(row["altitude_m"]))
                     and math.isfinite(float(row["mass_kg"]))

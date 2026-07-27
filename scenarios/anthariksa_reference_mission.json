@@ -10,7 +10,8 @@
   },
   "monte_carlo": {
     "samples": 20,
-    "seed": 1
+    "seed": 1,
+    "telemetry_sample_percent": 2.0
   },
   "environment": {
     "latitude_deg": -6.2,

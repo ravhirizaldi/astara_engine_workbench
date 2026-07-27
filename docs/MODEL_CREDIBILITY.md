@@ -68,16 +68,27 @@ with its source and timestamp.
 Run:
 
 ```bash
-python3 -m astara analyze scenarios/anthariksa_reference_mission.json --samples 20 --seed 1
+python3 -m astara analyze scenarios/anthariksa_reference_mission.json \
+  --samples 20 --seed 1
 ```
 
 The command writes:
 
 - `convergence.csv`: declared-horizon results at `dt`, `dt/2`, and `dt/4`
-- `monte_carlo.csv`: sampled factors and result metrics for every run
+- `monte_carlo.csv`: sampled factors, random seed, status/failure reason, max Q,
+  max Mach, apogee, stage burnout times, and both stage impact points
+- `retained_runs.csv`: retained-run reason and relative artifact directory
+- `retained_runs/`: complete sensor, truth, FSW, event, scenario, vehicle, and
+  manifest artifacts for every failure and a deterministic 2% successful sample
 - `summary.json`: provenance, declared uncertainty, convergence result, and
-  P5/median/P95 result ranges
+  P5/median/P95 result ranges plus CPU/worker and retention counts
 - `scenario.json`: the exact analyzed input
+
+Monte Carlo samples are embarrassingly parallel and return compact result rows.
+The default worker count uses CPU affinity and reserves 25% of logical CPUs, so
+8 available cores use 6 workers. Use `--workers 1` for serial execution or
+`--workers N` for an explicit limit. Full telemetry retention can be adjusted
+with `--telemetry-percent`; convergence runs remain serial.
 
 The Monte Carlo result covers only the distributions declared in the scenario.
 It is uncertainty propagation, not physical validation.
@@ -98,7 +109,7 @@ duration when landing-state convergence is required.
 | Propulsion | Curve bounds and propellant-integral checks | Static-fire correlation and residuals |
 | Aerodynamics | Envelope flags and coefficient interpolation | CFD/wind-tunnel correlation |
 | Mass properties | Fraction-dependent CG/inertia | Measured mass and reviewed inertia model |
-| Flight software | C++ SIL mode-transition checks | Processor/HIL timing and interface tests |
+| Flight software | C++ SIL mode, guidance, freshness, fallback, and separation-continuity checks | Processor/HIL timing, calibrated AHRS, redundancy, and interface tests |
 | Recovery | Functional deployment simulation | Drop-test and inflation-load correlation |
 
 ## Review gate

@@ -132,6 +132,19 @@ def geodetic_to_ecef(latitude_deg: float, longitude_deg: float, altitude_m: floa
     )
 
 
+def ecef_to_geodetic(position_ecef: np.ndarray) -> tuple[float, float, float]:
+    radius = float(np.linalg.norm(position_ecef))
+    if radius <= 1e-12:
+        raise ValueError("ECEF position must not be zero")
+    latitude_deg = math.degrees(
+        math.asin(max(-1.0, min(1.0, float(position_ecef[2]) / radius)))
+    )
+    longitude_deg = math.degrees(
+        math.atan2(float(position_ecef[1]), float(position_ecef[0]))
+    )
+    return latitude_deg, longitude_deg, radius - EARTH_RADIUS_M
+
+
 def ned_basis(position_ecef: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     up = unit(position_ecef)
     longitude = math.atan2(position_ecef[1], position_ecef[0])

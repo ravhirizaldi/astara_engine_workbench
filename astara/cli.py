@@ -38,6 +38,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     analyze.add_argument("--samples", type=int)
     analyze.add_argument("--seed", type=int)
+    analyze.add_argument("--workers", type=int)
+    analyze.add_argument("--telemetry-percent", type=float)
     analyze.add_argument("--output", default="runs")
 
     replay = commands.add_parser(
@@ -72,6 +74,8 @@ def main(argv: list[str] | None = None) -> int:
             samples=arguments.samples,
             seed=arguments.seed,
             output_root=Path(arguments.output),
+            workers=arguments.workers,
+            telemetry_sample_percent=arguments.telemetry_percent,
         )
         print(output_dir)
         print((output_dir / "summary.json").read_text(encoding="utf-8"))

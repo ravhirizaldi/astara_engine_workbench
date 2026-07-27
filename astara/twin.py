@@ -18,11 +18,15 @@ import numpy as np
 from . import __version__
 from .aero import AeroResult, atmosphere, estimate
 from .flight_core import (
+    FSW_BODY_CORE,
+    FSW_BODY_INTEGRATED,
     MODE_NAMES,
+    NAVIGATION_STATUS_NAMES,
     SENSOR_CSV_FIELDS,
     FlightCore,
     FswOutput,
     SensorFrame,
+    decode_faults,
     sensor_frame_to_row,
 )
 from .math3d import (
@@ -30,6 +34,7 @@ from .math3d import (
     EARTH_RADIUS_M,
     EARTH_ROTATION_RAD_S,
     cross3,
+    ecef_to_geodetic,
     ecef_to_ned,
     geodetic_to_ecef,
     initial_attitude,
@@ -75,6 +80,8 @@ class Body:
     sampled_gnss_velocity_ecef_m_s: np.ndarray | None = None
     next_barometer_sample_s: float = 0.0
     next_gnss_sample_s: float = 0.0
+    last_barometer_sample_s: float = 0.0
+    last_gnss_sample_s: float = 0.0
     next_fsw_sample_s: float = 0.0
     last_tvc_rad: np.ndarray = field(default_factory=lambda: np.zeros(2))
     last_fin_rad: np.ndarray = field(default_factory=lambda: np.zeros(3))
@@ -232,6 +239,7 @@ def _sensor_frame(
         body.sampled_barometer_altitude_m = altitude + rng.normal(
             0.0, sensors["barometer_noise_m"]
         )
+        body.last_barometer_sample_s = time_s
         body.next_barometer_sample_s = time_s + 1.0 / sensors["barometer_rate_hz"]
     if (
         body.sampled_gnss_position_ecef_m is None
@@ -243,6 +251,7 @@ def _sensor_frame(
         body.sampled_gnss_velocity_ecef_m_s = body.velocity_ecef_m_s + rng.normal(
             0.0, sensors["gnss_velocity_noise_m_s"], 3
         )
+        body.last_gnss_sample_s = time_s
         body.next_gnss_sample_s = time_s + 1.0 / sensors["gnss_rate_hz"]
     barometer_altitude = float(body.sampled_barometer_altitude_m)
     gnss_position = body.sampled_gnss_position_ecef_m.copy()
@@ -293,6 +302,8 @@ def _sensor_frame(
         gnss_valid,
         barometer_valid,
         int(separated),
+        body.last_barometer_sample_s,
+        body.last_gnss_sample_s,
     )
 
 
@@ -769,7 +780,9 @@ def _telemetry_row(
         "fsw_fin_roll_deg": math.degrees(output.fin_roll_rad),
         "fsw_fin_pitch_deg": math.degrees(output.fin_pitch_rad),
         "fsw_fin_yaw_deg": math.degrees(output.fin_yaw_rad),
+        "fsw_navigation_status": NAVIGATION_STATUS_NAMES[output.navigation_status],
         "fsw_fault_flags": int(output.fault_flags),
+        "fsw_faults": decode_faults(output.fault_flags),
         "tvc_pitch_deg": math.degrees(body.last_tvc_rad[0]),
         "tvc_yaw_deg": math.degrees(body.last_tvc_rad[1]),
         "fin_roll_deg": math.degrees(body.last_fin_rad[0]),
@@ -797,12 +810,15 @@ def run_simulation(
     output_root: str | Path = "runs",
     create_report: bool = True,
     persist: bool = True,
+    summary_only: bool = False,
     on_sample: Callable[
         [float, list[dict[str, Any]], list[dict[str, Any]]], None
     ]
     | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> RunResult:
+    if summary_only and persist:
+        raise ValueError("summary_only cannot persist telemetry")
     validate_scenario(scenario)
     if seed is None:
         seed = int(scenario.get("simulation", {}).get("seed", 1))
@@ -841,11 +857,23 @@ def run_simulation(
     )
     bodies = [integrated_stack]
     cores: dict[str, FlightCore] = {
-        "integrated_stack": FlightCore(scenario, 0)
+        "integrated_stack": FlightCore(scenario, FSW_BODY_INTEGRATED)
     }
     outputs: dict[str, FswOutput] = {"integrated_stack": FswOutput()}
     telemetry: list[dict[str, Any]] = []
     fsw_rows: list[dict[str, Any]] = []
+    summary_statistics = {
+        "telemetry_samples": 0,
+        "aero_out_of_envelope_samples": 0,
+        "aero_out_of_envelope_pre_recovery_samples": 0,
+        "maximum_altitude_m": 0.0,
+        "maximum_mach": 0.0,
+        "maximum_dynamic_pressure_pa": 0.0,
+        "maximum_angle_of_attack_deg": 0.0,
+        "minimum_engine_health_percent": 100.0,
+        "altitude_error_squared_sum": 0.0,
+        "finite_positive_state": True,
+    }
     events: list[dict[str, Any]] = [
         {
             "time_s": 0.0,
@@ -935,15 +963,32 @@ def run_simulation(
                                 "detail": "",
                             }
                         )
+                    if (
+                        previous_mode is not None
+                        and MODE_NAMES[previous_mode] == "BOOST_2"
+                        and mode_name == "COAST"
+                    ):
+                        events.append(
+                            {
+                                "time_s": time_s,
+                                "body": body.name,
+                                "event": "burnout_stage_2",
+                                "detail": "",
+                            }
+                        )
                     previous_modes[body.name] = output.mode
 
             if not separated and outputs["integrated_stack"].stage_separate:
                 core_stage, upper_stage = _split_stack(integrated_stack, scenario)
-                cores["integrated_stack"].close()
-                del cores["integrated_stack"]
+                integrated_core = cores.pop("integrated_stack")
+                integrated_output = outputs.pop("integrated_stack")
                 bodies = [core_stage, upper_stage]
-                cores["core_stage"] = FlightCore(scenario, 1)
-                cores["upper_stage"] = FlightCore(scenario, 2)
+                cores["core_stage"] = FlightCore(scenario, FSW_BODY_CORE)
+                cores["upper_stage"] = integrated_core
+                outputs["core_stage"] = FswOutput()
+                outputs["upper_stage"] = integrated_output
+                previous_modes.pop("integrated_stack", None)
+                previous_modes["upper_stage"] = integrated_output.mode
                 separated = True
                 events.append(
                     {
@@ -953,19 +998,19 @@ def run_simulation(
                         "detail": "core stage and upper stage created",
                     }
                 )
-                for body in bodies:
-                    body.next_fsw_sample_s = time_s
-                    outputs[body.name] = _run_fsw_substeps(
-                        cores[body.name],
-                        body,
-                        scenario,
-                        rng,
-                        time_s,
-                        launch_position,
-                        True,
-                        FswOutput(),
-                        record_sensor,
-                    )
+                core_stage.next_fsw_sample_s = time_s
+                upper_stage.next_fsw_sample_s = integrated_stack.next_fsw_sample_s
+                outputs["core_stage"] = _run_fsw_substeps(
+                    cores["core_stage"],
+                    core_stage,
+                    scenario,
+                    rng,
+                    time_s,
+                    launch_position,
+                    True,
+                    outputs["core_stage"],
+                    record_sensor,
+                )
 
             current_values: dict[str, tuple[float, float, float]] = {}
             for body in bodies:
@@ -1050,22 +1095,69 @@ def run_simulation(
                         temperature,
                         launch_position,
                     )
-                    telemetry.append(row)
-                    new_rows.append(row)
-                    fsw_rows.append(
-                        {
-                            "time_s": round(time_s, 6),
-                            "body": body.name,
-                            "mode": MODE_NAMES[output.mode],
-                            "estimated_altitude_m": output.estimated_altitude_m,
-                            "estimated_vertical_velocity_m_s": output.estimated_vertical_velocity_m_s,
-                            "estimated_attitude_w": output.estimated_attitude_wxyz[0],
-                            "estimated_attitude_x": output.estimated_attitude_wxyz[1],
-                            "estimated_attitude_y": output.estimated_attitude_wxyz[2],
-                            "estimated_attitude_z": output.estimated_attitude_wxyz[3],
-                            "fault_flags": output.fault_flags,
-                        }
+                    fsw_row = {
+                        "time_s": round(time_s, 6),
+                        "body": body.name,
+                        "mode": MODE_NAMES[output.mode],
+                        "estimated_altitude_m": output.estimated_altitude_m,
+                        "estimated_vertical_velocity_m_s": output.estimated_vertical_velocity_m_s,
+                        "estimated_attitude_w": output.estimated_attitude_wxyz[0],
+                        "estimated_attitude_x": output.estimated_attitude_wxyz[1],
+                        "estimated_attitude_y": output.estimated_attitude_wxyz[2],
+                        "estimated_attitude_z": output.estimated_attitude_wxyz[3],
+                        "navigation_status": NAVIGATION_STATUS_NAMES[
+                            output.navigation_status
+                        ],
+                        "fault_flags": output.fault_flags,
+                        "faults": decode_faults(output.fault_flags),
+                    }
+                    summary_statistics["telemetry_samples"] += 1
+                    summary_statistics["aero_out_of_envelope_samples"] += int(
+                        not row["aero_valid"]
                     )
+                    summary_statistics[
+                        "aero_out_of_envelope_pre_recovery_samples"
+                    ] += int(
+                        not row["aero_valid"]
+                        and not row["drogue_deployed"]
+                        and not row["main_deployed"]
+                    )
+                    summary_statistics["maximum_altitude_m"] = max(
+                        summary_statistics["maximum_altitude_m"],
+                        float(row["altitude_m"]),
+                    )
+                    summary_statistics["maximum_mach"] = max(
+                        summary_statistics["maximum_mach"],
+                        float(row["mach"]),
+                    )
+                    summary_statistics["maximum_dynamic_pressure_pa"] = max(
+                        summary_statistics["maximum_dynamic_pressure_pa"],
+                        float(row["dynamic_pressure_pa"]),
+                    )
+                    summary_statistics["maximum_angle_of_attack_deg"] = max(
+                        summary_statistics["maximum_angle_of_attack_deg"],
+                        float(row["angle_of_attack_deg"]),
+                    )
+                    summary_statistics["minimum_engine_health_percent"] = min(
+                        summary_statistics["minimum_engine_health_percent"],
+                        float(row["engine_health_percent"]),
+                    )
+                    altitude_error = float(row["altitude_m"]) - float(
+                        fsw_row["estimated_altitude_m"]
+                    )
+                    summary_statistics["altitude_error_squared_sum"] += (
+                        altitude_error * altitude_error
+                    )
+                    summary_statistics["finite_positive_state"] = bool(
+                        summary_statistics["finite_positive_state"]
+                        and math.isfinite(float(row["altitude_m"]))
+                        and math.isfinite(float(row["mass_kg"]))
+                        and float(row["mass_kg"]) > 0.0
+                    )
+                    if not summary_only:
+                        telemetry.append(row)
+                        fsw_rows.append(fsw_row)
+                    new_rows.append(row)
                 if on_sample:
                     on_sample(time_s, new_rows, events)
                 next_output_s += output_interval
@@ -1078,31 +1170,34 @@ def run_simulation(
         if sensor_file is not None:
             sensor_file.close()
 
-    invalid_rows = sum(not row["aero_valid"] for row in telemetry)
-    invalid_pre_recovery_rows = sum(
-        not row["aero_valid"]
-        and not row["drogue_deployed"]
-        and not row["main_deployed"]
-        for row in telemetry
+    invalid_rows = int(
+        summary_statistics["aero_out_of_envelope_samples"]
+    )
+    invalid_pre_recovery_rows = int(
+        summary_statistics["aero_out_of_envelope_pre_recovery_samples"]
     )
     invalid_recovery_rows = invalid_rows - invalid_pre_recovery_rows
     landed = {body.name: body.landed for body in bodies}
-    maximum_altitude_m = max(
-        (float(row["altitude_m"]) for row in telemetry), default=0.0
+    impact_points = {}
+    for body in bodies:
+        if body.landed:
+            latitude_deg, longitude_deg, altitude_m = ecef_to_geodetic(
+                body.position_ecef_m
+            )
+            impact_points[body.name] = {
+                "latitude_deg": latitude_deg,
+                "longitude_deg": longitude_deg,
+                "altitude_m": altitude_m,
+            }
+    maximum_altitude_m = float(
+        summary_statistics["maximum_altitude_m"]
     )
-    altitude_errors = [
-        float(truth["altitude_m"]) - float(fsw["estimated_altitude_m"])
-        for truth, fsw in zip(telemetry, fsw_rows, strict=True)
-    ]
+    telemetry_samples = int(summary_statistics["telemetry_samples"])
     altitude_rmse_m = math.sqrt(
-        sum(error * error for error in altitude_errors) / max(len(altitude_errors), 1)
+        float(summary_statistics["altitude_error_squared_sum"])
+        / max(telemetry_samples, 1)
     )
-    finite = all(
-        math.isfinite(float(row["altitude_m"]))
-        and math.isfinite(float(row["mass_kg"]))
-        and float(row["mass_kg"]) > 0.0
-        for row in telemetry
-    )
+    finite = bool(summary_statistics["finite_positive_state"])
     separated_event = any(event["event"] == "stage_separation" for event in events)
     checks = {
         "finite_positive_state": finite,
@@ -1129,8 +1224,22 @@ def run_simulation(
         "aero_out_of_envelope_pre_recovery_samples": invalid_pre_recovery_rows,
         "aero_out_of_envelope_recovery_samples": invalid_recovery_rows,
         "landed": landed,
+        "impact_points": impact_points,
         "duration_s": time_s,
         "maximum_altitude_m": maximum_altitude_m,
+        "summary_metrics": {
+            "telemetry_samples": telemetry_samples,
+            "maximum_mach": summary_statistics["maximum_mach"],
+            "maximum_dynamic_pressure_pa": summary_statistics[
+                "maximum_dynamic_pressure_pa"
+            ],
+            "maximum_angle_of_attack_deg": summary_statistics[
+                "maximum_angle_of_attack_deg"
+            ],
+            "minimum_engine_health_percent": summary_statistics[
+                "minimum_engine_health_percent"
+            ],
+        },
         "navigation_altitude_rmse_m": altitude_rmse_m,
         "checks": checks,
         "model_configuration": {
