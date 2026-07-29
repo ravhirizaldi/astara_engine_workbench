@@ -1,4 +1,4 @@
-"""ctypes bridge to the generic flight-software core."""
+"""Aerospace Workbench ctypes bridge to the generic flight-software core."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Mapping, Sequence
 
-from .scenario import resolve_mission_events
+from .configuration.scenarios import resolve_mission_events
 
 FSW_MAX_GUIDANCE_POINTS = 32
 FSW_MAX_SENSOR_CHANNELS = 3
@@ -651,7 +651,7 @@ def fsw_input_from_frame(
 
 
 def build_library() -> Path:
-    root = Path(__file__).resolve().parent.parent
+    root = Path(__file__).resolve().parents[2]
     source = root / "flight_core"
     build = source / "build"
     library = build / "libfsw_core.so"

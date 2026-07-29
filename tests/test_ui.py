@@ -7,13 +7,21 @@ import unittest
 from collections import deque
 from unittest.mock import MagicMock, patch
 
-from astara.scenario import default_scenario
-from astara.ui import AstaraWorkbench, _run_simulation_process
+from aerospace_workbench.configuration.scenarios import default_scenario
+from aerospace_workbench.ui import EngineeringWorkbench, _run_simulation_process
 
 
 class LiveUiTests(unittest.TestCase):
+    @patch("main.show_workbench", return_value=True)
+    def test_main_launcher_opens_only_astara(self, show_workbench: MagicMock) -> None:
+        import main
+
+        main.main()
+
+        show_workbench.assert_called_once_with()
+
     def test_close_releases_process_and_queue(self) -> None:
-        app = AstaraWorkbench.__new__(AstaraWorkbench)
+        app = EngineeringWorkbench.__new__(EngineeringWorkbench)
         app._closing = False
         app._refresh_after_id = "refresh-id"
         app.root = MagicMock()
@@ -36,7 +44,7 @@ class LiveUiTests(unittest.TestCase):
         app.root.destroy.assert_called_once_with()
 
     def test_copy_json_copies_full_viewer_text(self) -> None:
-        app = AstaraWorkbench.__new__(AstaraWorkbench)
+        app = EngineeringWorkbench.__new__(EngineeringWorkbench)
         app.root = MagicMock()
         app.status_var = MagicMock()
         app.is_wsl = False
@@ -50,12 +58,15 @@ class LiveUiTests(unittest.TestCase):
         app.root.clipboard_append.assert_called_once_with('{"name": "Anthariksa"}')
         app.status_var.set.assert_called_once_with("Scenario JSON copied to clipboard")
 
-    @patch("astara.ui.subprocess.run")
-    @patch("astara.ui.shutil.which", return_value="/mnt/c/Windows/System32/clip.exe")
+    @patch("aerospace_workbench.ui.subprocess.run")
+    @patch(
+        "aerospace_workbench.ui.shutil.which",
+        return_value="/mnt/c/Windows/System32/clip.exe",
+    )
     def test_copy_json_uses_windows_clipboard_under_wsl(
         self, _which: MagicMock, run: MagicMock
     ) -> None:
-        app = AstaraWorkbench.__new__(AstaraWorkbench)
+        app = EngineeringWorkbench.__new__(EngineeringWorkbench)
         app.root = MagicMock()
         app.status_var = MagicMock()
         app.is_wsl = True
@@ -76,7 +87,7 @@ class LiveUiTests(unittest.TestCase):
         app.status_var.set.assert_called_once_with("Vehicle JSON copied to clipboard")
 
     def test_metrics_refresh_without_forcing_plot_redraw(self) -> None:
-        app = AstaraWorkbench.__new__(AstaraWorkbench)
+        app = EngineeringWorkbench.__new__(EngineeringWorkbench)
         app.live_lock = threading.Lock()
         app.live_dirty = True
         app.live_rows = deque(
@@ -132,7 +143,7 @@ class LiveUiTests(unittest.TestCase):
         app.root.after.assert_called_once()
 
     def test_stream_sums_body_thrust_and_keeps_peak(self) -> None:
-        app = AstaraWorkbench.__new__(AstaraWorkbench)
+        app = EngineeringWorkbench.__new__(EngineeringWorkbench)
         app.live_lock = threading.Lock()
         app.live_rows = deque()
         app.live_events = []

@@ -1,4 +1,4 @@
-"""ASTARA deterministic 6-DOF software-in-the-loop mission simulation."""
+"""Deterministic 6-DOF software-in-the-loop mission simulation."""
 
 from __future__ import annotations
 
@@ -15,9 +15,15 @@ from typing import Any, Callable
 
 import numpy as np
 
-from . import __version__
-from .aero import AeroResult, atmosphere, estimate
-from .flight_core import (
+from .. import __version__
+from ..aero import AeroResult, atmosphere, estimate
+from ..configuration.scenarios import (
+    evidence_documents,
+    model_source_hash,
+    scenario_hash,
+    validate_scenario,
+)
+from ..flight_core import (
     FSW_BODY_CORE,
     FSW_BODY_INTEGRATED,
     FSW_DISCRETE_ACTION_DEPLOY_DROGUE,
@@ -32,7 +38,7 @@ from .flight_core import (
     decode_faults,
     sensor_frame_to_row,
 )
-from .math3d import (
+from ..math3d import (
     EARTH_MU,
     EARTH_RADIUS_M,
     EARTH_ROTATION_RAD_S,
@@ -49,7 +55,6 @@ from .math3d import (
     quat_to_euler,
     unit,
 )
-from .scenario import evidence_documents, model_source_hash, scenario_hash, validate_scenario
 
 FSW_TIMING_MODES = ("deterministic", "measured", "injected")
 
@@ -1800,7 +1805,7 @@ def run_simulation(
         and rocketpy_config.get("enabled", False)
     ):
         try:
-            from .rocketpy_adapter import run_rocketpy_reference
+            from ..rocketpy_adapter import run_rocketpy_reference
 
             reference = run_rocketpy_reference(scenario, telemetry, output_dir)
         except Exception as error:
@@ -1821,7 +1826,7 @@ def run_simulation(
             json.dumps(manifest, indent=2), encoding="utf-8"
         )
     if create_report and persist and not cancelled:
-        from .reporting import create_report_artifacts
+        from ..reporting import create_report_artifacts
 
         create_report_artifacts(result)
     return result

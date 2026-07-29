@@ -27,9 +27,9 @@ python3 main.py
 Menjalankan simulasi tanpa GUI:
 
 ```bash
-python3 -m astara validate
-python3 -m astara build-fsw
-python3 -m astara simulate scenarios/anthariksa_reference_mission.json --seed 1
+awb validate
+awb build-fsw
+awb simulate scenarios/anthariksa_reference_mission.json --seed 1
 ```
 
 Hasil setiap simulasi disimpan di direktori `runs/` yang unik. Isinya mencakup

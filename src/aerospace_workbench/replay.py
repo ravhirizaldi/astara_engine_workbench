@@ -1,4 +1,4 @@
-"""Replay recorded sensor frames through the generic flight core."""
+"""Aerospace Workbench sensor replay through the generic flight core."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from .flight_core import (
     decode_faults,
     sensor_frame_from_row,
 )
-from .scenario import validate_scenario
+from .configuration.scenarios import validate_scenario
 
 REPLAY_FIELDS = (
     "body",

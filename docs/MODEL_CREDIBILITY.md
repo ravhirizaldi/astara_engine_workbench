@@ -68,7 +68,7 @@ with its source and timestamp.
 Run:
 
 ```bash
-python3 -m astara analyze scenarios/anthariksa_reference_mission.json \
+awb analyze scenarios/anthariksa_reference_mission.json \
   --samples 20 --seed 1
 ```
 

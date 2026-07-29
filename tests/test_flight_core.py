@@ -2,14 +2,14 @@ import ctypes
 import unittest
 from unittest import mock
 
-from astara.flight_core import (
+from aerospace_workbench.flight_core import (
     FSW_COMMAND_ARM,
     FSW_COMMAND_LAUNCH,
     FlightCore,
     SensorFrame,
     sensor_suite_from_frames,
 )
-from astara.scenario import default_scenario
+from aerospace_workbench.configuration.scenarios import default_scenario
 
 
 class FlightCoreTests(unittest.TestCase):
@@ -132,7 +132,7 @@ class FlightCoreTests(unittest.TestCase):
         with (
             FlightCore(scenario, auto_commands=False) as core,
             mock.patch(
-                "astara.flight_core.time.perf_counter_ns",
+                "aerospace_workbench.flight_core.time.perf_counter_ns",
                 side_effect=lambda: next(timer_values),
             ),
         ):

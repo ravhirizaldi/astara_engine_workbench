@@ -1,4 +1,4 @@
-"""ASTARA RocketPy reference run for trajectory comparison."""
+"""RocketPy reference run for trajectory comparison."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import Any
 
 import numpy as np
 
-from .scenario import resolve_mission_events
+from .configuration.scenarios import resolve_mission_events
 
 
 def _enabled_engine_scale(stage: dict[str, Any]) -> float:

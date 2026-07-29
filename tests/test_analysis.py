@@ -5,19 +5,19 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from astara.analysis import (
+from aerospace_workbench.analysis import (
     _metrics,
     _selected_success_samples,
     run_credibility_analysis,
     worker_count,
 )
-from astara.scenario import default_scenario
-from astara.twin import RunResult, run_simulation
+from aerospace_workbench.configuration.scenarios import default_scenario
+from aerospace_workbench.simulation.runner import RunResult, run_simulation
 
 
 class CredibilityAnalysisTests(unittest.TestCase):
     def test_worker_budget_reserves_quarter_of_available_cpus(self) -> None:
-        with patch("astara.analysis.available_cpu_count", return_value=8):
+        with patch("aerospace_workbench.analysis.available_cpu_count", return_value=8):
             self.assertEqual(worker_count(20), (8, 6))
             self.assertEqual(worker_count(4), (8, 4))
             self.assertEqual(worker_count(20, requested=1), (8, 1))

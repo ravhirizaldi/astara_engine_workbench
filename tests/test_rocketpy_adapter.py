@@ -2,9 +2,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from astara.rocketpy_adapter import run_rocketpy_reference
-from astara.scenario import default_scenario
-from astara.twin import run_simulation
+from aerospace_workbench.configuration.scenarios import default_scenario
+from aerospace_workbench.rocketpy_adapter import run_rocketpy_reference
+from aerospace_workbench.simulation.runner import run_simulation
 
 
 class RocketPyAdapterTests(unittest.TestCase):

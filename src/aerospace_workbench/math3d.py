@@ -1,4 +1,4 @@
-"""ASTARA quaternion and coordinate helpers."""
+"""Quaternion and coordinate helpers."""
 
 from __future__ import annotations
 

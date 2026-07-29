@@ -4,14 +4,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from astara.flight_core import (
+from aerospace_workbench.flight_core import (
     SENSOR_CSV_FIELDS,
     SensorFrame,
     sensor_frame_from_row,
     sensor_frame_to_row,
 )
-from astara.replay import replay_fsw
-from astara.scenario import default_scenario
+from aerospace_workbench.configuration.scenarios import default_scenario
+from aerospace_workbench.replay import replay_fsw
 
 
 class ReplayTests(unittest.TestCase):

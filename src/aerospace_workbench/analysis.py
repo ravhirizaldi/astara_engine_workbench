@@ -1,4 +1,4 @@
-"""ASTARA timestep-convergence and Monte Carlo credibility analysis."""
+"""Timestep-convergence and Monte Carlo credibility analysis."""
 
 from __future__ import annotations
 
@@ -19,8 +19,13 @@ import numpy as np
 
 from . import __version__
 from .flight_core import build_library
-from .scenario import evidence_documents, model_source_hash, scenario_hash, validate_scenario
-from .twin import RunResult, run_simulation
+from .configuration.scenarios import (
+    evidence_documents,
+    model_source_hash,
+    scenario_hash,
+    validate_scenario,
+)
+from .simulation.runner import RunResult, run_simulation
 
 PERCENTILE_METRICS = (
     "maximum_altitude_m",

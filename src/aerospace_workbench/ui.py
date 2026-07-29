@@ -1,4 +1,4 @@
-"""ASTARA offline mission engineering workbench."""
+"""ASTARA Engineering Workbench desktop UI."""
 
 from __future__ import annotations
 
@@ -15,9 +15,13 @@ from pathlib import Path
 
 from matplotlib.figure import Figure
 
+from .configuration.scenarios import (
+    default_scenario_path,
+    load_scenario,
+    load_scenario_documents,
+)
 from .flight_core import build_library
-from .scenario import default_scenario_path, load_scenario, load_scenario_documents
-from .twin import RunResult, run_simulation
+from .simulation.runner import RunResult, run_simulation
 
 
 def _run_simulation_process(
@@ -69,8 +73,8 @@ def _run_simulation_process(
         messages.put(("finished", result))
 
 
-class AstaraWorkbench:
-    def __init__(self, root, legacy_app_class=None) -> None:
+class EngineeringWorkbench:
+    def __init__(self, root) -> None:
         import tkinter as tk
         from tkinter import filedialog, ttk
         from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -79,7 +83,6 @@ class AstaraWorkbench:
         self.ttk = ttk
         self.filedialog = filedialog
         self.root = root
-        self.legacy_app_class = legacy_app_class
         self.result: RunResult | None = None
         self.process_context = mp.get_context("spawn")
         self.cancel_event = self.process_context.Event()
@@ -102,7 +105,7 @@ class AstaraWorkbench:
         self._current_thrust_n = 0.0
         self._peak_thrust_n = 0.0
         self._run_max_time_s = 1.0
-        root.title("ASTARA Engineering Workbench — SIMULATION ONLY")
+        root.title("ASTARA Engineering Workbench")
         root.geometry("1360x880")
         root.minsize(1000, 680)
 
@@ -293,9 +296,6 @@ class AstaraWorkbench:
             controls, text="Cancel", command=self._cancel_run, state="disabled"
         )
         self.cancel_button.pack(side="left", padx=(8, 0))
-        ttk.Button(
-            controls, text="Engine Bench", command=self._open_legacy
-        ).pack(side="right")
 
         status = ttk.Frame(self.run_tab)
         status.grid(row=3, column=0, sticky="ew", pady=(12, 8))
@@ -750,12 +750,6 @@ class AstaraWorkbench:
             return
         self.status_var.set(f"Flight core ready: {path}")
 
-    def _open_legacy(self) -> None:
-        if not self.legacy_app_class:
-            return
-        window = self.tk.Toplevel(self.root)
-        self.legacy_app_class(window)
-
     def _open_output(self) -> None:
         if not self.result:
             return
@@ -788,7 +782,7 @@ class AstaraWorkbench:
         self.root.destroy()
 
 
-def show_workbench(legacy_app_class=None) -> bool:
+def show_workbench() -> bool:
     if os.environ.get("ASTARA_NO_GUI") == "1":
         return False
     try:
@@ -799,7 +793,7 @@ def show_workbench(legacy_app_class=None) -> bool:
         root = tk.Tk()
     except tk.TclError:
         return False
-    app = AstaraWorkbench(root, legacy_app_class)
+    app = EngineeringWorkbench(root)
     try:
         root.mainloop()
     finally:

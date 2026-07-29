@@ -9,16 +9,20 @@ from unittest import mock
 
 import numpy as np
 
-from astara.flight_core import FswOutput
-from astara.math3d import (
+from aerospace_workbench.configuration.scenarios import (
+    default_scenario,
+    load_scenario,
+    scenario_hash,
+)
+from aerospace_workbench.flight_core import FswOutput
+from aerospace_workbench.math3d import (
     EARTH_ROTATION_RAD_S,
     geodetic_to_ecef,
     initial_attitude,
     quat_conjugate,
     quat_rotate,
 )
-from astara.scenario import default_scenario, load_scenario, scenario_hash
-from astara.twin import (
+from aerospace_workbench.simulation.runner import (
     Body,
     _actuator_commands,
     _apply_sensor_faults,
@@ -307,7 +311,7 @@ class TwinTests(unittest.TestCase):
         )
         timer_ns = iter(range(0, 1_000_000_000, 20_000_000))
         with mock.patch(
-            "astara.flight_core.time.perf_counter_ns",
+            "aerospace_workbench.flight_core.time.perf_counter_ns",
             side_effect=lambda: next(timer_ns),
         ):
             measured = run_simulation(

@@ -1,4 +1,4 @@
-"""ASTARA aerodynamic estimates for software-in-the-loop use."""
+"""Aerodynamic estimates for software-in-the-loop use."""
 
 from __future__ import annotations
 

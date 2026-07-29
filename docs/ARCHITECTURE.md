@@ -24,7 +24,7 @@ Truth-derived adapters ----------------+                         |
 separate. Flight software receives only the versioned `FswInput` ABI. The
 Python bridge maps recorded sensor channels plus typed air-data, propulsion,
 recovery-feedback, command, and platform-timing fields, so recorded inputs can
-replace the simulator through `python -m astara replay`.
+replace the simulator through `awb replay`.
 
 The sensor suite accepts up to three timestamped accelerometer/gyro,
 magnetometer, barometer, and GNSS channels. Magnetometer health is independent

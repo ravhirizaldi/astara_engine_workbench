@@ -1,4 +1,4 @@
-"""ASTARA command-line entrypoints for reproducible digital-twin runs."""
+"""Aerospace Workbench CLI for reproducible digital-twin runs."""
 
 from __future__ import annotations
 
@@ -11,10 +11,14 @@ from pathlib import Path
 from typing import Any, Callable, TextIO
 
 from .analysis import run_credibility_analysis
+from .configuration.scenarios import (
+    default_scenario_path,
+    load_scenario,
+    validate_scenario,
+)
 from .flight_core import build_library
 from .replay import replay_fsw
-from .scenario import default_scenario_path, load_scenario, validate_scenario
-from .twin import FSW_TIMING_MODES, run_simulation
+from .simulation.runner import FSW_TIMING_MODES, run_simulation
 
 
 class SimulationProgressReporter:
@@ -221,7 +225,7 @@ def _nonnegative_float(value: str) -> float:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="python -m astara")
+    parser = argparse.ArgumentParser(prog="awb")
     commands = parser.add_subparsers(dest="command", required=True)
 
     simulate = commands.add_parser("simulate", help="run a deterministic SIL mission")

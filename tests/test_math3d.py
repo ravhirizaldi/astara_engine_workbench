@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from astara.math3d import (
+from aerospace_workbench.math3d import (
     cross3,
     ecef_to_geodetic,
     ecef_to_ned,

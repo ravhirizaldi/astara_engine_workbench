@@ -1,4 +1,4 @@
-"""ASTARA PNG and PDF evidence generation."""
+"""Aerospace Workbench PNG and PDF evidence generation."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ matplotlib.use("Agg")
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.figure import Figure
 
-from .twin import RunResult
+from .simulation.runner import RunResult
 
 
 def _group(result: RunResult) -> dict[str, list[dict]]:

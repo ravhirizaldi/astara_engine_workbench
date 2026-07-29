@@ -1,7 +1,7 @@
 import copy
 import unittest
 
-from astara.scenario import (
+from aerospace_workbench.configuration.scenarios import (
     LEGACY_SCHEMA_VERSION,
     SCHEMA_VERSION,
     default_scenario,

@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aerospace-workbench"
+version = "0.1.0"
+description = "ASTARA Engineering Workbench simulation and SIL tools"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "matplotlib",
+    "numpy",
+    "rocketpy>=1.13,<2",
+]
+
+[project.scripts]
+awb = "aerospace_workbench.cli:main"
+aerospace-workbench = "aerospace_workbench.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

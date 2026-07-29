@@ -1,4 +1,4 @@
-"""ASTARA scenario and vehicle-definition loading."""
+"""Scenario and vehicle-definition loading."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ VEHICLE_KEYS = ("vehicle", "sensors", "actuators")
 
 def default_scenario_path() -> Path:
     return (
-        Path(__file__).resolve().parent.parent
+        Path(__file__).resolve().parents[3]
         / "scenarios"
         / "anthariksa_reference_mission.json"
     )
@@ -95,8 +95,8 @@ def evidence_documents(
 
 
 def model_source_hash() -> str:
-    root = Path(__file__).resolve().parent.parent
-    paths = sorted((root / "astara").glob("*.py"))
+    root = Path(__file__).resolve().parents[3]
+    paths = sorted((root / "src" / "aerospace_workbench").rglob("*.py"))
     paths.extend(
         (
             root / "flight_core" / "include" / "fsw.h",

@@ -5,8 +5,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from astara.cli import SimulationProgressReporter, main
-from astara.scenario import default_scenario
+from aerospace_workbench.cli import SimulationProgressReporter, main
+from aerospace_workbench.configuration.scenarios import default_scenario
 
 
 class _Stream(io.StringIO):
@@ -138,8 +138,14 @@ class CliProgressTests(unittest.TestCase):
             return result
 
         with (
-            patch("astara.cli.load_scenario", return_value=default_scenario()),
-            patch("astara.cli.run_simulation", side_effect=run_simulation) as run,
+            patch(
+                "aerospace_workbench.cli.load_scenario",
+                return_value=default_scenario(),
+            ),
+            patch(
+                "aerospace_workbench.cli.run_simulation",
+                side_effect=run_simulation,
+            ) as run,
             patch("sys.stdout", stdout),
             patch("sys.stderr", stderr),
         ):

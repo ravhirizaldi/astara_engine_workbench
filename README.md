@@ -26,12 +26,13 @@ environmental, and flight-test evidence.
 
 ## Files
 
-- `astara/` - scenario validation, 6-DOF truth model, C++ bridge, CLI, reports, and GUI
+- `src/aerospace_workbench/` - Python package for scenarios, simulation, CLI, reports, and GUI
 - `flight_core/` - dependency-free C++17 flight-software core and CTest check
 - `scenarios/` - versioned SI-unit mission inputs
 - `vehicles/` - stable mass, geometry, propulsion, aerodynamics, sensors, and actuators
 - `tests/` - Python regression and SIL integration checks
-- `main.py` - workbench launcher and preserved legacy engine dashboard
+- `main.py` - ASTARA Engineering Workbench launcher
+- `engine_bench_ui.py` - standalone legacy engine dashboard
 - `requirements.txt` - Python dependencies
 - `runs/` - generated digital-twin evidence
 - `output/` - generated legacy engine PNG/CSV output
@@ -51,6 +52,7 @@ Create and activate a virtual environment:
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.lock
+pip install -e . --no-deps
 ```
 
 ## Run
@@ -60,7 +62,7 @@ python3 main.py
 ```
 
 This opens ASTARA Engineering Workbench. Select a scenario, run the deterministic mission,
-inspect flight-software events and plots, or open the legacy engine dashboard.
+and inspect flight-software events and plots.
 The Live Mission tab streams bounded telemetry into altitude, speed, thrust, and
 ground-track plots while the solver runs. The solver runs in a separate process,
 so calculation and report generation cannot block Tk. The All Values view shows
@@ -70,17 +72,22 @@ plots retain at most 6,000 row references and draw at most 800 points per body.
 At Maximum speed, stale display snapshots may be dropped to keep the UI current;
 the saved CSV data remains complete.
 
-Run the reference mission without the GUI:
+Use `awb` as the preferred CLI:
 
 ```bash
-python3 -m astara validate
-python3 -m astara build-fsw
-python3 -m astara simulate --seed 1 --no-report
-python3 -m astara simulate --seed 1 --no-report --progress
-python3 -m astara simulate --seed 1 --no-report --quiet
-python3 -m astara simulate --seed 1 --no-report --progress-interval 0.5
-python3 -m astara analyze scenarios/anthariksa_reference_mission.json \
+awb validate
+awb build-fsw
+awb simulate --seed 1 --no-report
+awb replay runs/<run>/sensors.csv.gz
+awb analyze scenarios/anthariksa_reference_mission.json \
   --samples 20 --seed 1
+```
+
+The equivalent long command is `aerospace-workbench`. The module entry point
+also remains available:
+
+```bash
+python3 -m aerospace_workbench simulate --seed 1 --no-report
 ```
 
 Simulation progress appears automatically in an interactive terminal. Use
@@ -92,8 +99,8 @@ FSW host timing is deterministic by default. Use measured timing for profiling,
 or inject a repeatable duration to test deadline faults:
 
 ```bash
-python3 -m astara simulate --no-report --timing-mode measured
-python3 -m astara simulate --no-report --timing-mode injected \
+awb simulate --no-report --timing-mode measured
+awb simulate --no-report --timing-mode injected \
   --injected-execution-time 0.02
 ```
 
@@ -136,7 +143,7 @@ company/workbench name, not the controller namespace.
 Replay a recorded sensor stream through the same C++ flight core:
 
 ```bash
-python3 -m astara replay runs/<run>/sensors.csv.gz
+awb replay runs/<run>/sensors.csv.gz
 ```
 
 The controller consumes the complete mission attitude schedule with piecewise
@@ -259,11 +266,10 @@ engineering data.
 
 ## Engine Bench
 
-Set `ASTARA_ENGINE_BENCH=1` to open the realtime chamber dashboard
-directly:
+Run the standalone realtime chamber dashboard directly:
 
 ```bash
-ASTARA_ENGINE_BENCH=1 python3 main.py
+python3 engine_bench_ui.py
 ```
 
 Use its sliders to adjust simulation values, then use:
@@ -282,7 +288,7 @@ and combustion instability update during the run. Slider changes during an
 active or paused run are applied after Reset.
 
 Default provisional visualization thresholds are configured near the top of
-`main.py`:
+`engine_bench_ui.py`:
 
 - temperature warning / critical / failure: `3200 / 3700 / 4200 K`
 - pressure warning / critical / failure: `1.0 / 1.6 / 2.2 MPa`
@@ -303,7 +309,7 @@ as `wslview`, `xdg-open`, or `explorer.exe`.
 To skip opening image windows and only save PNG files:
 
 ```bash
-ASTARA_NO_GUI=1 ASTARA_NO_OPEN=1 python3 main.py
+ASTARA_NO_GUI=1 ASTARA_NO_OPEN=1 python3 engine_bench_ui.py
 ```
 
 If you use WSL with GUI support and the window does not open, confirm Tk support:
@@ -355,7 +361,7 @@ limiting factor, and recommendation to `output/simulation_data.csv`.
 
 ## Tuning
 
-Edit constants near the top of `main.py`:
+Edit constants near the top of `engine_bench_ui.py`:
 
 - `CHAMBER_VOLUME`
 - `COMBUSTION_TEMPERATURE`
