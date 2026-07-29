@@ -9,7 +9,7 @@ using namespace fsw_test;
 
 int main() {
     fsw::internal::Context context(default_config());
-    context.attitude_initialized = true;
+    context.navigation.attitude_initialized = true;
     fsw::internal::integrate_attitude(
         context, {0.0, 0.0, 0.1}, 1.0
     );

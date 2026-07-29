@@ -17,7 +17,7 @@ uint32_t launch_inhibits(
     if (!voted.imu_valid) {
         inhibits |= FSW_INHIBIT_IMU;
     }
-    if (!context.attitude_valid) {
+    if (!context.navigation.attitude_valid) {
         inhibits |= FSW_INHIBIT_ATTITUDE;
     }
     const bool propulsion_ready = fresh(
@@ -31,19 +31,19 @@ uint32_t launch_inhibits(
     if (!propulsion_ready) {
         inhibits |= FSW_INHIBIT_PROPULSION;
     }
-    if (context.latched_fault_flags & critical_fault_mask()) {
+    if (context.faults.latched_fault_flags & critical_fault_mask()) {
         inhibits |= FSW_INHIBIT_CRITICAL_FAULT;
     }
     if (
-        context.navigation_status == FSW_NAV_INERTIAL
-        || context.active_fault_flags & FSW_FAULT_NAV_UNCERTAINTY
+        context.navigation.navigation_status == FSW_NAV_INERTIAL
+        || context.faults.active_fault_flags & FSW_FAULT_NAV_UNCERTAINTY
     ) {
         inhibits |= FSW_INHIBIT_NAVIGATION;
     }
     if (
-        context.consecutive_overruns
+        context.timing.consecutive_overruns
             >= context.config.overrun_abort_count
-        || context.active_fault_flags & FSW_FAULT_WATCHDOG
+        || context.faults.active_fault_flags & FSW_FAULT_WATCHDOG
     ) {
         inhibits |= FSW_INHIBIT_TIMING;
     }
@@ -59,81 +59,81 @@ void process_command(
     if (command.type == FSW_COMMAND_NONE) {
         return;
     }
-    context.command_sequence = command.sequence;
-    context.command_type = command.type;
-    context.command_result = FSW_COMMAND_REJECTED_INVALID;
-    context.inhibit_flags = 0;
-    context.event_flags |= FSW_EVENT_COMMAND_PROCESSED;
+    context.control.command_sequence = command.sequence;
+    context.control.command_type = command.type;
+    context.control.command_result = FSW_COMMAND_REJECTED_INVALID;
+    context.control.inhibit_flags = 0;
+    context.control.event_flags |= FSW_EVENT_COMMAND_PROCESSED;
     if (
-        command.sequence <= context.last_command_sequence
+        command.sequence <= context.control.last_command_sequence
         || input.sensors.time_s - command.issue_time_s
             > context.config.command_timeout_s
     ) {
-        context.command_result = FSW_COMMAND_REJECTED_STALE;
+        context.control.command_result = FSW_COMMAND_REJECTED_STALE;
         return;
     }
-    context.last_command_sequence = command.sequence;
+    context.control.last_command_sequence = command.sequence;
     switch (command.type) {
         case FSW_COMMAND_ARM:
-            if (context.mode != FSW_MODE_SAFE) {
-                context.command_result =
+            if (context.mission.mode != FSW_MODE_SAFE) {
+                context.control.command_result =
                     FSW_COMMAND_REJECTED_INVALID_STATE;
                 return;
             }
-            context.inhibit_flags = launch_inhibits(
+            context.control.inhibit_flags = launch_inhibits(
                 context, input, voted
             ) & ~FSW_INHIBIT_NAVIGATION;
-            if (context.inhibit_flags != 0) {
-                context.command_result = FSW_COMMAND_REJECTED_INHIBITED;
+            if (context.control.inhibit_flags != 0) {
+                context.control.command_result = FSW_COMMAND_REJECTED_INHIBITED;
                 return;
             }
-            context.mode = FSW_MODE_ARMED;
-            context.command_result = FSW_COMMAND_ACCEPTED;
+            context.mission.mode = FSW_MODE_ARMED;
+            context.control.command_result = FSW_COMMAND_ACCEPTED;
             return;
         case FSW_COMMAND_DISARM:
-            if (context.mode != FSW_MODE_ARMED) {
-                context.command_result =
+            if (context.mission.mode != FSW_MODE_ARMED) {
+                context.control.command_result =
                     FSW_COMMAND_REJECTED_INVALID_STATE;
                 return;
             }
-            context.mode = FSW_MODE_SAFE;
-            context.command_result = FSW_COMMAND_ACCEPTED;
+            context.mission.mode = FSW_MODE_SAFE;
+            context.control.command_result = FSW_COMMAND_ACCEPTED;
             return;
         case FSW_COMMAND_LAUNCH:
-            if (context.mode != FSW_MODE_ARMED) {
-                context.command_result =
+            if (context.mission.mode != FSW_MODE_ARMED) {
+                context.control.command_result =
                     FSW_COMMAND_REJECTED_INVALID_STATE;
                 return;
             }
-            context.inhibit_flags = launch_inhibits(
+            context.control.inhibit_flags = launch_inhibits(
                 context, input, voted
             );
-            if (context.inhibit_flags != 0) {
-                context.command_result = FSW_COMMAND_REJECTED_INHIBITED;
+            if (context.control.inhibit_flags != 0) {
+                context.control.command_result = FSW_COMMAND_REJECTED_INHIBITED;
                 return;
             }
-            context.mode = FSW_MODE_IGNITION;
-            context.launch_commanded_s = input.sensors.time_s;
-            context.stage1_ignite_request = true;
-            context.command_result = FSW_COMMAND_ACCEPTED;
+            context.mission.mode = FSW_MODE_IGNITION;
+            context.mission.launch_commanded_s = input.sensors.time_s;
+            context.control.stage1_ignite_request = true;
+            context.control.command_result = FSW_COMMAND_ACCEPTED;
             return;
         case FSW_COMMAND_ABORT:
-            if (context.mode == FSW_MODE_LANDED) {
-                context.command_result =
+            if (context.mission.mode == FSW_MODE_LANDED) {
+                context.control.command_result =
                     FSW_COMMAND_REJECTED_INVALID_STATE;
                 return;
             }
-            context.mode = FSW_MODE_ABORT;
-            context.command_result = FSW_COMMAND_ACCEPTED;
+            context.mission.mode = FSW_MODE_ABORT;
+            context.control.command_result = FSW_COMMAND_ACCEPTED;
             return;
         case FSW_COMMAND_CLEAR_FAULTS:
-            if (context.mode != FSW_MODE_SAFE) {
-                context.command_result =
+            if (context.mission.mode != FSW_MODE_SAFE) {
+                context.control.command_result =
                     FSW_COMMAND_REJECTED_INVALID_STATE;
                 return;
             }
-            context.latched_fault_flags &= critical_fault_mask();
-            context.command_result = FSW_COMMAND_ACCEPTED;
+            context.faults.latched_fault_flags &= critical_fault_mask();
+            context.control.command_result = FSW_COMMAND_ACCEPTED;
             return;
         default:
             return;

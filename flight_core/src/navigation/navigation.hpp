@@ -7,9 +7,8 @@ namespace fsw::internal {
 struct Context;
 struct VotedSensors;
 
-void update_navigation(
+bool update_navigation(
     Context& context,
-    const FswInput& input,
     const VotedSensors& voted
 );
 

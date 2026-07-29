@@ -3,9 +3,11 @@
 #include <new>
 
 #include "core/controller.hpp"
+#include "output/output_builder.hpp"
 #include "validation/config_validation.hpp"
 
 using fsw::internal::Controller;
+using fsw::internal::clear_output;
 
 extern "C" {
 
@@ -31,17 +33,14 @@ int32_t fsw_step(
     const FswInput* input,
     FswOutput* output
 ) {
-    if (handle == nullptr) {
-        if (output != nullptr) {
-            *output = {};
-            output->abi_version = FSW_ABI_VERSION;
-            output->struct_size = sizeof(FswOutput);
-            output->output_valid = 0;
-            output->step_status = FSW_STATUS_INVALID_ARGUMENT;
-        }
+    if (output == nullptr) {
         return FSW_STATUS_INVALID_ARGUMENT;
     }
-    return static_cast<Controller*>(handle)->step(input, output);
+    if (handle == nullptr || input == nullptr) {
+        clear_output(*output);
+        return FSW_STATUS_INVALID_ARGUMENT;
+    }
+    return static_cast<Controller*>(handle)->step(*input, *output);
 }
 
 void fsw_destroy(FswHandle handle) {

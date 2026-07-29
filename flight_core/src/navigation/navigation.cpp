@@ -5,7 +5,6 @@
 #include <cmath>
 
 #include "core/context.hpp"
-#include "faults/fault_manager.hpp"
 #include "math/frames.hpp"
 #include "math/quaternion.hpp"
 #include "math/vector3.hpp"
@@ -18,63 +17,62 @@ double filter_alpha(double sample_delta_s, double tau_s) {
     return 1.0 - std::exp(-std::max(sample_delta_s, kEpsilon) / tau_s);
 }
 
-void update_navigation(
+bool update_navigation(
     Context& context,
-    const FswInput& input,
     const VotedSensors& voted
 ) {
-    if (!context.navigation_initialized && voted.gnss_valid) {
-        context.position_ecef = voted.gnss_position;
-        context.velocity_ecef = voted.gnss_velocity;
-        context.altitude = voted.barometer_valid
+    if (!context.navigation.initialized && voted.gnss_valid) {
+        context.navigation.position_ecef = voted.gnss_position;
+        context.navigation.velocity_ecef = voted.gnss_velocity;
+        context.navigation.altitude = voted.barometer_valid
             ? voted.barometric_altitude
             : 0.0;
-        context.gnss_radius_reference_m = vector_norm(
-            context.position_ecef.data(), 3
-        ) - context.altitude;
-        context.gnss_altitude_reference_initialized = true;
-        context.launch_reference_attitude = launch_attitude(
-            context.position_ecef, context.config.launch_azimuth_rad
+        context.navigation.gnss_radius_reference_m = vector_norm(
+            context.navigation.position_ecef.data(), 3
+        ) - context.navigation.altitude;
+        context.navigation.gnss_altitude_reference_initialized = true;
+        context.navigation.launch_reference_attitude = launch_attitude(
+            context.navigation.position_ecef, context.config.launch_azimuth_rad
         );
-        context.attitude = context.launch_reference_attitude;
-        context.attitude_initialized = true;
-        context.navigation_initialized = true;
-        context.last_gnss_sample_time_s = voted.gnss_sample_time_s;
-        context.last_barometer_sample_time_s = voted.barometer_valid
+        context.navigation.attitude = context.navigation.launch_reference_attitude;
+        context.navigation.attitude_initialized = true;
+        context.navigation.initialized = true;
+        context.timing.last_gnss_sample_time_s = voted.gnss_sample_time_s;
+        context.timing.last_barometer_sample_time_s = voted.barometer_valid
             ? voted.barometer_sample_time_s
             : -1.0;
-        context.last_integrated_imu_sample_time_s = voted.imu_valid
+        context.timing.last_integrated_imu_sample_time_s = voted.imu_valid
             ? voted.imu_sample_time_s
             : -1.0;
     }
 
-    context.attitude_valid =
-        context.attitude_initialized && voted.imu_valid;
+    context.navigation.attitude_valid =
+        context.navigation.attitude_initialized && voted.imu_valid;
     const bool newer_imu = voted.imu_valid
-        && context.navigation_initialized
+        && context.navigation.initialized
         && voted.imu_sample_time_s
-            > context.last_integrated_imu_sample_time_s + kEpsilon;
+            > context.timing.last_integrated_imu_sample_time_s + kEpsilon;
     if (newer_imu) {
         const double imu_delta_s =
-            context.last_integrated_imu_sample_time_s < 0.0
-                ? context.step_delta_s
+            context.timing.last_integrated_imu_sample_time_s < 0.0
+                ? context.timing.step_delta_s
                 : voted.imu_sample_time_s
-                    - context.last_integrated_imu_sample_time_s;
+                    - context.timing.last_integrated_imu_sample_time_s;
         update_gyro_bias(context, voted, imu_delta_s);
         std::array<double, 3> corrected_gyro{};
         std::array<double, 3> corrected_acceleration{};
         for (int axis = 0; axis < 3; ++axis) {
             corrected_gyro[axis] =
-                voted.gyro[axis] - context.gyro_bias[axis];
+                voted.gyro[axis] - context.navigation.gyro_bias[axis];
             corrected_acceleration[axis] =
                 voted.acceleration[axis]
-                - context.accelerometer_bias[axis];
+                - context.navigation.accelerometer_bias[axis];
         }
         const std::array<double, 3> earth_rate{
             0.0, 0.0, kEarthRotationRadS
         };
         const auto earth_rate_body = rotate(
-            conjugate(context.attitude), earth_rate
+            conjugate(context.navigation.attitude), earth_rate
         );
         std::array<double, 3> ecef_relative_gyro{};
         for (int axis = 0; axis < 3; ++axis) {
@@ -83,21 +81,21 @@ void update_navigation(
         }
         integrate_attitude(context, ecef_relative_gyro, imu_delta_s);
         const auto specific_force_ecef = rotate(
-            context.attitude, corrected_acceleration
+            context.navigation.attitude, corrected_acceleration
         );
         const double radius = std::max(
-            vector_norm(context.position_ecef.data(), 3),
+            vector_norm(context.navigation.position_ecef.data(), 3),
             kEarthRadiusM
         );
         std::array<double, 3> gravity{};
         for (int axis = 0; axis < 3; ++axis) {
             gravity[axis] = -kEarthMuM3S2
-                * context.position_ecef[axis]
+                * context.navigation.position_ecef[axis]
                 / (radius * radius * radius);
         }
-        const auto coriolis = cross(earth_rate, context.velocity_ecef);
+        const auto coriolis = cross(earth_rate, context.navigation.velocity_ecef);
         const auto centrifugal = cross(
-            earth_rate, cross(earth_rate, context.position_ecef)
+            earth_rate, cross(earth_rate, context.navigation.position_ecef)
         );
         for (int axis = 0; axis < 3; ++axis) {
             const double acceleration_ecef =
@@ -105,32 +103,32 @@ void update_navigation(
                 + gravity[axis]
                 - 2.0 * coriolis[axis]
                 - centrifugal[axis];
-            context.position_ecef[axis] +=
-                context.velocity_ecef[axis] * imu_delta_s
+            context.navigation.position_ecef[axis] +=
+                context.navigation.velocity_ecef[axis] * imu_delta_s
                 + 0.5 * acceleration_ecef
                     * imu_delta_s * imu_delta_s;
-            context.velocity_ecef[axis] +=
+            context.navigation.velocity_ecef[axis] +=
                 acceleration_ecef * imu_delta_s;
         }
-        context.last_integrated_imu_sample_time_s =
+        context.timing.last_integrated_imu_sample_time_s =
             voted.imu_sample_time_s;
         const double attitude_process =
             context.config.gyro_process_sigma_rad_s * imu_delta_s;
-        for (double& variance : context.attitude_variance) {
+        for (double& variance : context.navigation.attitude_variance) {
             variance += attitude_process * attitude_process;
         }
         const double velocity_process =
             context.config.accelerometer_process_sigma_m_s2
             * imu_delta_s;
-        context.velocity_variance +=
+        context.navigation.velocity_variance +=
             velocity_process * velocity_process;
-        context.altitude_variance +=
-            context.velocity_variance * imu_delta_s * imu_delta_s;
+        context.navigation.altitude_variance +=
+            context.navigation.velocity_variance * imu_delta_s * imu_delta_s;
     } else if (!voted.imu_valid) {
-        for (double& variance : context.attitude_variance) {
+        for (double& variance : context.navigation.attitude_variance) {
             variance += context.config.max_attitude_sigma_rad
                 * context.config.max_attitude_sigma_rad
-                * context.step_delta_s;
+                * context.timing.step_delta_s;
         }
     }
 
@@ -140,27 +138,27 @@ void update_navigation(
     if (
         use_barometer
         && use_gnss
-        && context.gnss_altitude_reference_initialized
+        && context.navigation.gnss_altitude_reference_initialized
     ) {
         const double gnss_altitude = vector_norm(
             voted.gnss_position.data(), 3
-        ) - context.gnss_radius_reference_m;
-        context.gnss_altitude_innovation =
-            gnss_altitude - context.altitude;
-        context.barometer_innovation =
-            voted.barometric_altitude - context.altitude;
+        ) - context.navigation.gnss_radius_reference_m;
+        context.navigation.gnss_altitude_innovation =
+            gnss_altitude - context.navigation.altitude;
+        context.navigation.barometer_innovation =
+            voted.barometric_altitude - context.navigation.altitude;
         if (
             std::abs(voted.barometric_altitude - gnss_altitude)
             > context.config.cross_altitude_disagreement_m
         ) {
-            context.disagreement_flags |=
+            context.sensors.disagreement_flags |=
                 FSW_DISAGREEMENT_CROSS_ALTITUDE;
             navigation_disagreement = true;
             const double barometer_innovation = std::abs(
-                voted.barometric_altitude - context.altitude
+                voted.barometric_altitude - context.navigation.altitude
             );
             const double gnss_innovation = std::abs(
-                gnss_altitude - context.altitude
+                gnss_altitude - context.navigation.altitude
             );
             if (
                 barometer_innovation
@@ -186,89 +184,89 @@ void update_navigation(
     if (
         use_barometer
         && voted.barometer_sample_time_s
-            > context.last_barometer_sample_time_s + kEpsilon
+            > context.timing.last_barometer_sample_time_s + kEpsilon
     ) {
-        const double delta_s = context.last_barometer_sample_time_s < 0.0
-            ? context.step_delta_s
+        const double delta_s = context.timing.last_barometer_sample_time_s < 0.0
+            ? context.timing.step_delta_s
             : voted.barometer_sample_time_s
-                - context.last_barometer_sample_time_s;
+                - context.timing.last_barometer_sample_time_s;
         const double alpha = filter_alpha(
             delta_s, context.config.altitude_filter_tau_s
         );
-        context.barometer_innovation =
-            voted.barometric_altitude - context.altitude;
-        if (context.navigation_initialized) {
-            const auto up = unit(context.position_ecef);
+        context.navigation.barometer_innovation =
+            voted.barometric_altitude - context.navigation.altitude;
+        if (context.navigation.initialized) {
+            const auto up = unit(context.navigation.position_ecef);
             for (int axis = 0; axis < 3; ++axis) {
-                context.position_ecef[axis] +=
-                    alpha * context.barometer_innovation * up[axis];
+                context.navigation.position_ecef[axis] +=
+                    alpha * context.navigation.barometer_innovation * up[axis];
             }
         }
         const double measurement_variance =
             context.config.barometer_sigma_m
             * context.config.barometer_sigma_m;
-        context.altitude_variance =
+        context.navigation.altitude_variance =
             (1.0 - alpha) * (1.0 - alpha)
-                * context.altitude_variance
+                * context.navigation.altitude_variance
             + alpha * alpha * measurement_variance;
-        context.last_barometer_sample_time_s =
+        context.timing.last_barometer_sample_time_s =
             voted.barometer_sample_time_s;
     }
     if (
         use_gnss
         && voted.gnss_sample_time_s
-            > context.last_gnss_sample_time_s + kEpsilon
+            > context.timing.last_gnss_sample_time_s + kEpsilon
     ) {
-        const double delta_s = context.last_gnss_sample_time_s < 0.0
-            ? context.step_delta_s
-            : voted.gnss_sample_time_s - context.last_gnss_sample_time_s;
+        const double delta_s = context.timing.last_gnss_sample_time_s < 0.0
+            ? context.timing.step_delta_s
+            : voted.gnss_sample_time_s - context.timing.last_gnss_sample_time_s;
         const double alpha = filter_alpha(
             delta_s, context.config.velocity_filter_tau_s
         );
-        context.gnss_velocity_innovation = voted.vertical_velocity
+        context.navigation.gnss_velocity_innovation = voted.vertical_velocity
             - radial_velocity(
-                context.position_ecef.data(),
-                context.velocity_ecef.data()
+                context.navigation.position_ecef.data(),
+                context.navigation.velocity_ecef.data()
             );
         for (int axis = 0; axis < 3; ++axis) {
-            context.position_ecef[axis] += alpha * (
+            context.navigation.position_ecef[axis] += alpha * (
                 voted.gnss_position[axis]
-                - context.position_ecef[axis]
+                - context.navigation.position_ecef[axis]
             );
-            context.velocity_ecef[axis] += alpha * (
+            context.navigation.velocity_ecef[axis] += alpha * (
                 voted.gnss_velocity[axis]
-                - context.velocity_ecef[axis]
+                - context.navigation.velocity_ecef[axis]
             );
         }
         const double measurement_variance =
             context.config.gnss_velocity_sigma_m_s
             * context.config.gnss_velocity_sigma_m_s;
-        context.velocity_variance =
+        context.navigation.velocity_variance =
             (1.0 - alpha) * (1.0 - alpha)
-                * context.velocity_variance
+                * context.navigation.velocity_variance
             + alpha * alpha * measurement_variance;
-        context.last_gnss_sample_time_s = voted.gnss_sample_time_s;
+        context.timing.last_gnss_sample_time_s = voted.gnss_sample_time_s;
     }
 
-    if (context.navigation_initialized) {
-        context.altitude = vector_norm(
-            context.position_ecef.data(), 3
-        ) - context.gnss_radius_reference_m;
-        context.vertical_velocity = radial_velocity(
-            context.position_ecef.data(),
-            context.velocity_ecef.data()
+    if (context.navigation.initialized) {
+        context.navigation.altitude = vector_norm(
+            context.navigation.position_ecef.data(), 3
+        ) - context.navigation.gnss_radius_reference_m;
+        context.navigation.vertical_velocity = radial_velocity(
+            context.navigation.position_ecef.data(),
+            context.navigation.velocity_ecef.data()
         );
     }
 
-    context.navigation_status = context.navigation_initialized
+    context.navigation.navigation_status = context.navigation.initialized
         && use_barometer && use_gnss
         ? FSW_NAV_NOMINAL
         : (
-            context.navigation_initialized && (use_barometer || use_gnss)
+            context.navigation.initialized && (use_barometer || use_gnss)
                 ? FSW_NAV_DEGRADED
                 : FSW_NAV_INERTIAL
         );
-    set_faults(context, input, voted, navigation_disagreement);
+    return navigation_disagreement;
 }
 
 }  // namespace fsw::internal

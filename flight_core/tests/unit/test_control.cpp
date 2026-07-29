@@ -16,9 +16,9 @@ int main() {
     REQUIRE(std::abs(midpoint.azimuth_rad - 0.2) < 1e-12);
 
     fsw::internal::Context context(config);
-    context.mode = FSW_MODE_BOOST_1;
-    context.attitude_valid = true;
-    context.ignition_confirmed_s = 0.0;
+    context.mission.mode = FSW_MODE_BOOST_1;
+    context.navigation.attitude_valid = true;
+    context.mission.ignition_confirmed_s = 0.0;
     auto input = input_at(5.0);
     FswOutput output{};
     fsw::internal::calculate_controls(context, input, output);

@@ -19,16 +19,16 @@ void calculate_controls(
 ) {
     const auto& suite = input.sensors;
     if (
-        !context.attitude_valid
+        !context.navigation.attitude_valid
         || (
-            context.mode != FSW_MODE_BOOST_1
-            && context.mode != FSW_MODE_BOOST_2
+            context.mission.mode != FSW_MODE_BOOST_1
+            && context.mission.mode != FSW_MODE_BOOST_2
         )
     ) {
         return;
     }
-    const double guidance_time_s = context.ignition_confirmed_s >= 0.0
-        ? std::max(suite.time_s - context.ignition_confirmed_s, 0.0)
+    const double guidance_time_s = context.mission.ignition_confirmed_s >= 0.0
+        ? std::max(suite.time_s - context.mission.ignition_confirmed_s, 0.0)
         : 0.0;
     const auto target = guidance_at(context.config, guidance_time_s);
     const auto angles = euler(relative_attitude(context));
@@ -41,13 +41,13 @@ void calculate_controls(
     );
     const double pitch_effort =
         context.config.control_kp * pitch_error
-        - context.config.control_kd * context.last_gyro[1];
+        - context.config.control_kd * context.navigation.last_gyro[1];
     const double yaw_effort =
         context.config.control_kp * yaw_error
-        - context.config.control_kd * context.last_gyro[2];
+        - context.config.control_kd * context.navigation.last_gyro[2];
     const double roll_effort =
         context.config.control_kp * roll_error
-        - context.config.control_kd * context.last_gyro[0];
+        - context.config.control_kd * context.navigation.last_gyro[0];
     const bool air_data_valid = fresh(
         input.air_data.valid,
         input.air_data.sample_time_s,

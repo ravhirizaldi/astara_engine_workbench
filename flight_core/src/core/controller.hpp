@@ -9,7 +9,7 @@ public:
     explicit Controller(const FswConfig& config);
 
     void reset();
-    int32_t step(const FswInput* input, FswOutput* output);
+    int32_t step(const FswInput& input, FswOutput& output);
 
 private:
     Context context_;

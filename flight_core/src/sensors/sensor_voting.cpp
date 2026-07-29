@@ -342,13 +342,13 @@ void vote_imus(
     for (uint32_t index = 0; index < suite.imu_count; ++index) {
         const auto& sample = suite.imus[index];
         if (evaluate_imu_channel(
-            context.imu_health[index],
+            context.sensors.imu_health[index],
             sample,
             suite.time_s,
             context.config
         )) {
             fresh_mask |= 1u << index;
-            if (!context.imu_health[index].rejected) {
+            if (!context.sensors.imu_health[index].rejected) {
                 healthy_mask |= 1u << index;
             }
         }
@@ -424,7 +424,7 @@ void vote_imus(
         if ((fresh_mask & (1u << index)) == 0) {
             continue;
         }
-        auto& health = context.imu_health[index];
+        auto& health = context.sensors.imu_health[index];
         if (!new_sample(health, suite.imus[index].sample_time_s)) {
             continue;
         }
@@ -500,13 +500,13 @@ void vote_magnetometers(
     ) {
         const auto& sample = suite.magnetometers[index];
         if (evaluate_magnetometer_channel(
-            context.magnetometer_health[index],
+            context.sensors.magnetometer_health[index],
             sample,
             suite.time_s,
             context.config
         )) {
             fresh_mask |= 1u << index;
-            if (!context.magnetometer_health[index].rejected) {
+            if (!context.sensors.magnetometer_health[index].rejected) {
                 healthy_mask |= 1u << index;
             }
         }
@@ -581,7 +581,7 @@ void vote_magnetometers(
         if ((fresh_mask & (1u << index)) == 0) {
             continue;
         }
-        auto& health = context.magnetometer_health[index];
+        auto& health = context.sensors.magnetometer_health[index];
         if (!new_sample(
             health, suite.magnetometers[index].sample_time_s
         )) {
@@ -624,13 +624,13 @@ void vote_barometers(
     for (uint32_t index = 0; index < suite.barometer_count; ++index) {
         const auto& sample = suite.barometers[index];
         if (evaluate_barometer_channel(
-            context.barometer_health[index],
+            context.sensors.barometer_health[index],
             sample,
             suite.time_s,
             context.config
         )) {
             fresh_mask |= 1u << index;
-            if (!context.barometer_health[index].rejected) {
+            if (!context.sensors.barometer_health[index].rejected) {
                 healthy_mask |= 1u << index;
             }
         }
@@ -699,7 +699,7 @@ void vote_barometers(
         if ((fresh_mask & (1u << index)) == 0) {
             continue;
         }
-        auto& health = context.barometer_health[index];
+        auto& health = context.sensors.barometer_health[index];
         if (!new_sample(health, suite.barometers[index].sample_time_s)) {
             continue;
         }
@@ -785,13 +785,13 @@ void vote_gnss(
     for (uint32_t index = 0; index < suite.gnss_count; ++index) {
         const auto& sample = suite.gnss[index];
         if (evaluate_gnss_channel(
-            context.gnss_health[index],
+            context.sensors.gnss_health[index],
             sample,
             suite.time_s,
             context.config
         )) {
             fresh_mask |= 1u << index;
-            if (!context.gnss_health[index].rejected) {
+            if (!context.sensors.gnss_health[index].rejected) {
                 healthy_mask |= 1u << index;
             }
         }
@@ -868,7 +868,7 @@ void vote_gnss(
         if ((fresh_mask & (1u << index)) == 0) {
             continue;
         }
-        auto& health = context.gnss_health[index];
+        auto& health = context.sensors.gnss_health[index];
         if (!new_sample(health, suite.gnss[index].sample_time_s)) {
             continue;
         }
@@ -911,38 +911,38 @@ VotedSensors vote_sensors(Context& context, const FswSensorSuite& suite) {
     vote_barometers(context, suite, voted);
     vote_gnss(context, suite, voted);
 
-    context.imu_usable_mask = voted.imu_usable_mask;
-    context.magnetometer_usable_mask =
+    context.sensors.imu_usable_mask = voted.imu_usable_mask;
+    context.sensors.magnetometer_usable_mask =
         voted.magnetometer_usable_mask;
-    context.barometer_usable_mask = voted.barometer_usable_mask;
-    context.gnss_usable_mask = voted.gnss_usable_mask;
-    context.imu_rejected_mask = rejected_mask(
-        context.imu_health, suite.imu_count
+    context.sensors.barometer_usable_mask = voted.barometer_usable_mask;
+    context.sensors.gnss_usable_mask = voted.gnss_usable_mask;
+    context.sensors.imu_rejected_mask = rejected_mask(
+        context.sensors.imu_health, suite.imu_count
     );
-    context.magnetometer_rejected_mask = rejected_mask(
-        context.magnetometer_health, suite.magnetometer_count
+    context.sensors.magnetometer_rejected_mask = rejected_mask(
+        context.sensors.magnetometer_health, suite.magnetometer_count
     );
-    context.barometer_rejected_mask = rejected_mask(
-        context.barometer_health, suite.barometer_count
+    context.sensors.barometer_rejected_mask = rejected_mask(
+        context.sensors.barometer_health, suite.barometer_count
     );
-    context.gnss_rejected_mask = rejected_mask(
-        context.gnss_health, suite.gnss_count
+    context.sensors.gnss_rejected_mask = rejected_mask(
+        context.sensors.gnss_health, suite.gnss_count
     );
-    context.disagreement_flags = voted.disagreement_flags;
-    context.sensor_status_flags = 0;
+    context.sensors.disagreement_flags = voted.disagreement_flags;
+    context.sensors.sensor_status_flags = 0;
     if (bit_count(voted.imu_usable_mask) == 1) {
-        context.sensor_status_flags |= FSW_SENSOR_STATUS_IMU_SINGLE_SOURCE;
+        context.sensors.sensor_status_flags |= FSW_SENSOR_STATUS_IMU_SINGLE_SOURCE;
     }
     if (bit_count(voted.magnetometer_usable_mask) == 1) {
-        context.sensor_status_flags |=
+        context.sensors.sensor_status_flags |=
             FSW_SENSOR_STATUS_MAGNETOMETER_SINGLE_SOURCE;
     }
     if (bit_count(voted.barometer_usable_mask) == 1) {
-        context.sensor_status_flags |=
+        context.sensors.sensor_status_flags |=
             FSW_SENSOR_STATUS_BAROMETER_SINGLE_SOURCE;
     }
     if (bit_count(voted.gnss_usable_mask) == 1) {
-        context.sensor_status_flags |= FSW_SENSOR_STATUS_GNSS_SINGLE_SOURCE;
+        context.sensors.sensor_status_flags |= FSW_SENSOR_STATUS_GNSS_SINGLE_SOURCE;
     }
     return voted;
 }

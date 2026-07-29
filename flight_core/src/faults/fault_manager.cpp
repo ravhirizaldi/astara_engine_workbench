@@ -49,20 +49,20 @@ int32_t fault_severity(uint32_t flags) {
 }
 
 void commit_faults(Context& context, uint32_t flags) {
-    const uint32_t rising = flags & ~context.previous_active_fault_flags;
-    context.changed_fault_flags =
-        flags ^ context.previous_active_fault_flags;
+    const uint32_t rising = flags & ~context.faults.previous_active_fault_flags;
+    context.faults.changed_fault_flags =
+        flags ^ context.faults.previous_active_fault_flags;
     for (uint32_t index = 0; index < FSW_FAULT_COUNT; ++index) {
         if (rising & (1u << index)) {
-            ++context.fault_occurrence_count[index];
+            ++context.faults.fault_occurrence_count[index];
         }
     }
-    context.active_fault_flags = flags;
-    context.latched_fault_flags |= flags;
-    context.previous_active_fault_flags = flags;
-    context.highest_fault_severity = fault_severity(flags);
-    if (context.changed_fault_flags != 0) {
-        context.event_flags |= FSW_EVENT_FAULT_CHANGED;
+    context.faults.active_fault_flags = flags;
+    context.faults.latched_fault_flags |= flags;
+    context.faults.previous_active_fault_flags = flags;
+    context.faults.highest_fault_severity = fault_severity(flags);
+    if (context.faults.changed_fault_flags != 0) {
+        context.control.event_flags |= FSW_EVENT_FAULT_CHANGED;
     }
 }
 
@@ -83,22 +83,22 @@ void set_faults(
         flags |= FSW_FAULT_IMU_UNAVAILABLE;
     }
     if (
-        context.disagreement_flags
+        context.sensors.disagreement_flags
         & (FSW_DISAGREEMENT_ACCELERATION | FSW_DISAGREEMENT_GYRO)
     ) {
         flags |= FSW_FAULT_IMU_DISAGREEMENT;
     }
     if (
-        context.disagreement_flags
+        context.sensors.disagreement_flags
         & FSW_DISAGREEMENT_MAGNETOMETER
     ) {
         flags |= FSW_FAULT_MAGNETOMETER_DISAGREEMENT;
     }
-    if (context.disagreement_flags & FSW_DISAGREEMENT_BAROMETER) {
+    if (context.sensors.disagreement_flags & FSW_DISAGREEMENT_BAROMETER) {
         flags |= FSW_FAULT_BAROMETER_DISAGREEMENT;
     }
     if (
-        context.disagreement_flags
+        context.sensors.disagreement_flags
         & (
             FSW_DISAGREEMENT_GNSS_POSITION
             | FSW_DISAGREEMENT_GNSS_VELOCITY
@@ -109,7 +109,7 @@ void set_faults(
     if (navigation_disagreement) {
         flags |= FSW_FAULT_NAV_DISAGREEMENT;
     }
-    if (context.navigation_status == FSW_NAV_INERTIAL) {
+    if (context.navigation.navigation_status == FSW_NAV_INERTIAL) {
         flags |= FSW_FAULT_NAV_INERTIAL;
     }
     const auto& suite = input.sensors;
@@ -137,13 +137,13 @@ void set_faults(
         flags |= FSW_FAULT_PROPULSION_HEALTH;
     }
     if (
-        std::sqrt(context.altitude_variance)
+        std::sqrt(context.navigation.altitude_variance)
             > context.config.max_altitude_sigma_m
-        || std::sqrt(context.velocity_variance)
+        || std::sqrt(context.navigation.velocity_variance)
             > context.config.max_velocity_sigma_m_s
         || std::sqrt(*std::max_element(
-            context.attitude_variance.begin(),
-            context.attitude_variance.end()
+            context.navigation.attitude_variance.begin(),
+            context.navigation.attitude_variance.end()
         )) > context.config.max_attitude_sigma_rad
     ) {
         flags |= FSW_FAULT_NAV_UNCERTAINTY;
@@ -155,28 +155,28 @@ void set_faults(
         context.config.platform_status_timeout_s
     );
     if (platform_valid) {
-        context.previous_execution_time_s =
+        context.timing.previous_execution_time_s =
             input.platform.previous_execution_time_s;
         const bool overrun = input.platform.deadline_missed
             || input.platform.previous_execution_time_s
                 > context.config.loop_deadline_s;
-        context.consecutive_overruns = overrun
-            ? context.consecutive_overruns + 1
+        context.timing.consecutive_overruns = overrun
+            ? context.timing.consecutive_overruns + 1
             : 0;
-        if (context.consecutive_overruns > 0) {
+        if (context.timing.consecutive_overruns > 0) {
             flags |= FSW_FAULT_DEADLINE_OVERRUN;
         }
         if (!input.platform.watchdog_healthy) {
             flags |= FSW_FAULT_WATCHDOG;
         }
     } else {
-        context.consecutive_overruns = 0;
+        context.timing.consecutive_overruns = 0;
         flags |= FSW_FAULT_WATCHDOG;
     }
-    if (context.input_timing_mismatch) {
+    if (context.timing.input_timing_mismatch) {
         flags |= FSW_FAULT_INPUT_TIMING;
     }
-    flags |= context.active_fault_flags & (
+    flags |= context.faults.active_fault_flags & (
         FSW_FAULT_LAUNCH_NOT_CONFIRMED
         | FSW_FAULT_SEPARATION_NOT_CONFIRMED
         | FSW_FAULT_STAGE2_IGNITION
@@ -186,24 +186,24 @@ void set_faults(
     for (uint32_t index = 0; index < FSW_FAULT_COUNT; ++index) {
         const uint32_t bit = 1u << index;
         if (flags & bit) {
-            context.fault_healthy_time_s[index] = 0.0;
-        } else if (context.active_fault_flags & bit) {
-            context.fault_healthy_time_s[index] += context.step_delta_s;
+            context.faults.fault_healthy_time_s[index] = 0.0;
+        } else if (context.faults.active_fault_flags & bit) {
+            context.faults.fault_healthy_time_s[index] += context.timing.step_delta_s;
             if (
-                context.fault_healthy_time_s[index]
+                context.faults.fault_healthy_time_s[index]
                 < context.config.fault_recovery_persistence_s
             ) {
                 flags |= bit;
             }
         } else {
-            context.fault_healthy_time_s[index] = 0.0;
+            context.faults.fault_healthy_time_s[index] = 0.0;
         }
     }
     commit_faults(context, flags);
 }
 
 void raise_fault(Context& context, uint32_t fault) {
-    commit_faults(context, context.active_fault_flags | fault);
+    commit_faults(context, context.faults.active_fault_flags | fault);
 }
 
 }  // namespace fsw::internal
