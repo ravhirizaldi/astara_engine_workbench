@@ -38,7 +38,7 @@ penerbangan, log kejadian, grafik PNG, dan laporan PDF.
 
 ## Batas validitas
 
-- Rentang referensi: ketinggian 10–100 km.
+- Rentang referensi: ketinggian 20–100 km.
 - Koefisien aerodinamika diperkirakan dari geometri sederhana, bukan CFD.
 - Model propulsi memakai parameter `c*`, koefisien dorong, efisiensi nosel, dan
   laju aliran yang harus dikalibrasi.

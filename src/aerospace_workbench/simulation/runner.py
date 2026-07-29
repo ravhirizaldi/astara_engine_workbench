@@ -1195,7 +1195,7 @@ def run_simulation(
         "stage_separation": separated_event,
         "core_stage_landed": landed.get("core_stage", False),
         "upper_stage_landed": landed.get("upper_stage", False),
-        "altitude_envelope_10_to_100_km": 10_000.0 <= maximum_altitude_m <= 100_000.0,
+        "altitude_envelope_20_to_100_km": 20_000.0 <= maximum_altitude_m <= 100_000.0,
         "navigation_altitude_rmse_below_25_m": altitude_rmse_m < 25.0,
     }
     manifest = {

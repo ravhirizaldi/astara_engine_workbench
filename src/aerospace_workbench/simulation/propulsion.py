@@ -71,10 +71,10 @@ def propulsion_step(
         if output.stage1_ignite and body.engine_started_s is None:
             body.engine_started_s = time_s
         should_burn = body.engine_started_s is not None
-    if body.stage_index == 1 and output.stage2_ignite:
-        if body.engine_started_s is None:
+    if body.stage_index == 1:
+        if output.stage2_ignite and body.engine_started_s is None:
             body.engine_started_s = time_s
-        should_burn = True
+        should_burn = body.engine_started_s is not None
     if output.abort:
         should_burn = False
     start = body.engine_started_s or 0.0

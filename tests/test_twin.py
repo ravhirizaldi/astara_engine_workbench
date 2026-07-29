@@ -25,6 +25,7 @@ from aerospace_workbench.mathematics.quaternions import (
     quat_rotate,
 )
 from aerospace_workbench.simulation.actuators import actuator_commands
+from aerospace_workbench.simulation.propulsion import propulsion_step
 from aerospace_workbench.simulation.runner import (
     _derivative,
     _sensor_frame,
@@ -35,6 +36,33 @@ from aerospace_workbench.simulation.truth_model import Body
 
 
 class TwinTests(unittest.TestCase):
+    def test_upper_stage_burn_persists_after_ignition_pulse(self) -> None:
+        scenario = default_scenario()
+        stage = scenario["vehicle"]["stages"][1]
+        body = Body(
+            name="upper_stage",
+            stage_index=1,
+            stage=stage,
+            position_ecef_m=np.array([6_378_137.0, 0.0, 0.0]),
+            velocity_ecef_m_s=np.zeros(3),
+            attitude_wxyz=np.array([1.0, 0.0, 0.0, 0.0]),
+            body_rates_rad_s=np.zeros(3),
+            fuel_kg=stage["fuel_mass_kg"],
+            oxidizer_kg=stage["oxidizer_mass_kg"],
+        )
+        ignition = FswOutput()
+        ignition.stage2_ignite = 1
+
+        propulsion_step(
+            body, ignition, 10.0, 0.005, scenario
+        )
+        later_thrust, _, _ = propulsion_step(
+            body, FswOutput(), 10.1, 0.005, scenario
+        )
+
+        self.assertEqual(body.engine_started_s, 10.0)
+        self.assertGreater(later_thrust, 0.0)
+
     def test_body_to_ecef_attitude_removes_earth_rate(self) -> None:
         scenario = default_scenario()
         stage = scenario["vehicle"]["stages"][0]
