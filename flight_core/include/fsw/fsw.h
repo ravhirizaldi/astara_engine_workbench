@@ -1,9 +1,10 @@
-#ifndef FSW_H
-#define FSW_H
+#ifndef FSW_FSW_H
+#define FSW_FSW_H
 
 #include <stdint.h>
 
-#define FSW_ABI_VERSION 0x00050000u
+#include "fsw/version.h"
+
 #define FSW_MAX_GUIDANCE_POINTS 32
 #define FSW_MAX_SENSOR_CHANNELS 3
 #define FSW_FAULT_COUNT 21

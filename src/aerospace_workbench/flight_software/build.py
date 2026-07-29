@@ -11,13 +11,15 @@ def build_library() -> Path:
     source = root / "flight_core"
     build = source / "build"
     library = build / "libfsw_core.so"
+    stamp = build / ".awb-fsw-build-stamp"
     inputs = (
-        tuple((source / "src").glob("*.cpp"))
-        + tuple((source / "include").glob("*.h"))
+        tuple((source / "src").rglob("*.cpp"))
+        + tuple((source / "src").rglob("*.hpp"))
+        + tuple((source / "include").rglob("*.h"))
         + (source / "CMakeLists.txt",)
     )
-    if library.exists() and all(
-        path.stat().st_mtime <= library.stat().st_mtime for path in inputs
+    if library.exists() and stamp.exists() and all(
+        path.stat().st_mtime <= stamp.stat().st_mtime for path in inputs
     ):
         return library
     subprocess.run(
@@ -32,4 +34,5 @@ def build_library() -> Path:
         check=True,
     )
     subprocess.run(["cmake", "--build", str(build), "--parallel"], check=True)
+    stamp.touch()
     return library

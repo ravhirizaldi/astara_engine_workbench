@@ -208,12 +208,10 @@ def resolve_mission_events(scenario: dict[str, Any]) -> dict[str, float]:
 def model_source_hash() -> str:
     root = _repository_root()
     paths = sorted((root / "src" / "aerospace_workbench").rglob("*.py"))
-    paths.extend(
-        (
-            root / "flight_core" / "include" / "fsw.h",
-            root / "flight_core" / "src" / "fsw.cpp",
-        )
-    )
+    flight_core = root / "flight_core"
+    paths.extend(sorted((flight_core / "include").rglob("*.h")))
+    paths.extend(sorted((flight_core / "src").rglob("*.hpp")))
+    paths.extend(sorted((flight_core / "src").rglob("*.cpp")))
     digest = hashlib.sha256()
     for path in paths:
         digest.update(str(path.relative_to(root)).encode())

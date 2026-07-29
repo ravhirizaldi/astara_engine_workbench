@@ -68,6 +68,12 @@ input.
 The generic C ABI uses `fsw_*`, `Fsw*`, and `FSW_*` names. ASTARA naming remains
 at the company workbench, schema, and requirement layers.
 
+Only `flight_core/include/fsw/fsw.h` and `version.h` are public. The exported
+shared-library surface is limited to the six C functions declared there.
+Controller state and the validation, voting, navigation, mission, fault,
+guidance, control, and output modules remain private C++ implementation details
+under `flight_core/src/`.
+
 ## Current process model
 
 The desktop solver owns the truth model and loads Flight Core through its stable
@@ -142,19 +148,13 @@ adapter and a later roadmap gate.
 - Host SIL results are simulation-only and unvalidated; they are not HIL,
   real-time, flight-qualified, or certification evidence.
 
-## Proposed module extraction after v0.5
+## Flight Core modules
 
-`fsw.cpp` remains one translation unit for this change. A later refactor can
-move existing internal code, without changing the C ABI, in this order:
-
-1. `navigation.{h,cpp}` for quaternion helpers, ECEF propagation, and aiding.
-2. `sensor_voting.{h,cpp}` for channel evaluation, voting, and health state.
-3. `mission.{h,cpp}` for command handling, event timestamps, and recovery.
-4. `faults.{h,cpp}` for fault lifecycle, severity, and freshness checks.
-5. `control.{h,cpp}` for guidance interpolation and actuator effort.
-
-Each extraction should be mechanical and independently verified in Debug and
-Release; new interfaces or allocation are not prerequisites.
+The public C API owns no flight logic. It validates the opaque handle and
+delegates to a private controller. The controller preserves the step order
+across private validation, sensor voting, navigation, command, mission, output,
+and control modules. Internal headers are available only to the native target
+and unit tests; Python continues loading `libfsw_core.so` through `ctypes`.
 
 ## Verification
 
