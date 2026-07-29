@@ -259,6 +259,34 @@ class TwinTests(unittest.TestCase):
 
         self.assertTrue(np.array_equal(fins, np.zeros(3)))
 
+    def test_actuator_commands_are_rate_limited(self) -> None:
+        scenario = default_scenario()
+        stage = scenario["vehicle"]["stages"][0]
+        body = Body(
+            name="integrated_stack",
+            stage_index=0,
+            stage=stage,
+            position_ecef_m=np.zeros(3),
+            velocity_ecef_m_s=np.zeros(3),
+            attitude_wxyz=np.array([1.0, 0.0, 0.0, 0.0]),
+            body_rates_rad_s=np.zeros(3),
+            fuel_kg=stage["fuel_mass_kg"],
+            oxidizer_kg=stage["oxidizer_mass_kg"],
+        )
+        output = FswOutput()
+        output.tvc_pitch_rad = 1.0
+        output.tvc_yaw_rad = -1.0
+        dt_s = 0.001
+        max_delta = math.radians(
+            scenario["actuators"]["max_rate_deg_s"]
+        ) * dt_s
+
+        first, _ = actuator_commands(output, scenario, body, 0.0, dt_s)
+        second, _ = actuator_commands(output, scenario, body, dt_s, dt_s)
+
+        np.testing.assert_allclose(first, [max_delta, -max_delta])
+        np.testing.assert_allclose(second, [2.0 * max_delta, -2.0 * max_delta])
+
     def test_multi_engine_telemetry_and_engine_cutoff(self) -> None:
         scenario = default_scenario()
         scenario["simulation"]["max_time_s"] = 0.5

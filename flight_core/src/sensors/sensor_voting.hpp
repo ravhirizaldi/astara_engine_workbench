@@ -10,6 +10,8 @@ namespace fsw::internal {
 struct Context;
 
 struct VotedSensors {
+    bool accelerometer_valid{};
+    bool gyroscope_valid{};
     bool imu_valid{};
     bool magnetometer_valid{};
     bool barometer_valid{};
@@ -21,11 +23,13 @@ struct VotedSensors {
     std::array<double, 3> gnss_velocity{};
     double barometric_altitude{};
     double vertical_velocity{};
-    double imu_sample_time_s{-1.0};
+    double accelerometer_sample_time_s{-1.0};
+    double gyroscope_sample_time_s{-1.0};
     double magnetometer_sample_time_s{-1.0};
     double barometer_sample_time_s{-1.0};
     double gnss_sample_time_s{-1.0};
-    uint32_t imu_usable_mask{};
+    uint32_t accelerometer_usable_mask{};
+    uint32_t gyroscope_usable_mask{};
     uint32_t magnetometer_usable_mask{};
     uint32_t barometer_usable_mask{};
     uint32_t gnss_usable_mask{};

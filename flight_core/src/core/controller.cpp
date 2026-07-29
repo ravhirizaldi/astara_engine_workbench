@@ -30,6 +30,15 @@ int32_t validate_step_input(const Context& context, const FswInput& input) {
             && input.sensors.time_s
                 <= context.timing.last_time_s + kEpsilon
         )
+        || (
+            context.timing.initialized
+            && (
+                input.sensors.time_s - context.timing.last_time_s
+                    < context.config.min_step_s - kEpsilon
+                || input.sensors.time_s - context.timing.last_time_s
+                    > context.config.max_step_s + kEpsilon
+            )
+        )
     ) {
         return FSW_STATUS_INVALID_INPUT;
     }

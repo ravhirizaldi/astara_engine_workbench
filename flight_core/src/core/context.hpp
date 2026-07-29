@@ -12,7 +12,8 @@ struct TimingState {
     double last_time_s{};
     double step_delta_s{};
     bool input_timing_mismatch{};
-    double last_integrated_imu_sample_time_s{-1.0};
+    double last_integrated_accelerometer_sample_time_s{-1.0};
+    double last_integrated_gyroscope_sample_time_s{-1.0};
     double last_barometer_sample_time_s{-1.0};
     double last_gnss_sample_time_s{-1.0};
     uint32_t consecutive_overruns{};
@@ -20,17 +21,20 @@ struct TimingState {
 };
 
 struct SensorState {
-    std::array<ChannelHealth, FSW_MAX_SENSOR_CHANNELS> imu_health{};
+    std::array<ChannelHealth, FSW_MAX_SENSOR_CHANNELS> accelerometer_health{};
+    std::array<ChannelHealth, FSW_MAX_SENSOR_CHANNELS> gyroscope_health{};
     std::array<ChannelHealth, FSW_MAX_SENSOR_CHANNELS> magnetometer_health{};
     std::array<ChannelHealth, FSW_MAX_SENSOR_CHANNELS> barometer_health{};
     std::array<ChannelHealth, FSW_MAX_SENSOR_CHANNELS> gnss_health{};
     uint32_t disagreement_flags{};
     uint32_t sensor_status_flags{};
-    uint32_t imu_usable_mask{};
+    uint32_t accelerometer_usable_mask{};
+    uint32_t gyroscope_usable_mask{};
     uint32_t magnetometer_usable_mask{};
     uint32_t barometer_usable_mask{};
     uint32_t gnss_usable_mask{};
-    uint32_t imu_rejected_mask{};
+    uint32_t accelerometer_rejected_mask{};
+    uint32_t gyroscope_rejected_mask{};
     uint32_t magnetometer_rejected_mask{};
     uint32_t barometer_rejected_mask{};
     uint32_t gnss_rejected_mask{};

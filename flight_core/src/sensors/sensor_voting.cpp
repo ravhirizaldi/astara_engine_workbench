@@ -81,17 +81,25 @@ uint32_t rejected_mask(
     return mask;
 }
 
-bool evaluate_imu_channel(
+const double* imu_values(const FswImuSample& sample, bool accelerometer) {
+    return accelerometer
+        ? sample.acceleration_body_m_s2
+        : sample.gyro_body_rad_s;
+}
+
+bool evaluate_imu_component(
     ChannelHealth& health,
     const FswImuSample& sample,
     double time_s,
-    const FswConfig& config
+    const FswConfig& config,
+    bool accelerometer
 ) {
     health.flags = 0;
-    health.age_s = sample.accel_valid || sample.gyro_valid
+    const bool valid = accelerometer ? sample.accel_valid : sample.gyro_valid;
+    health.age_s = valid
         ? std::max(time_s - sample.sample_time_s, 0.0)
         : 0.0;
-    if (!sample.accel_valid || !sample.gyro_valid) {
+    if (!valid) {
         health.flags |= FSW_SENSOR_HEALTH_INVALID;
         return false;
     }
@@ -102,9 +110,12 @@ bool evaluate_imu_channel(
         return false;
     }
     if (
-        vector_norm(sample.acceleration_body_m_s2, 3)
-            > config.max_acceleration_m_s2
-        || vector_norm(sample.gyro_body_rad_s, 3) > config.max_gyro_rad_s
+        vector_norm(imu_values(sample, accelerometer), 3)
+            > (
+                accelerometer
+                    ? config.max_acceleration_m_s2
+                    : config.max_gyro_rad_s
+            )
     ) {
         health.flags |= FSW_SENSOR_HEALTH_OUT_OF_RANGE;
         return false;
@@ -277,25 +288,17 @@ bool evaluate_gnss_channel(
     return true;
 }
 
-bool imu_samples_agree(
+bool imu_components_agree(
     const FswImuSample& left,
     const FswImuSample& right,
-    const FswConfig& config,
-    uint32_t& disagreement_flags
+    double threshold,
+    bool accelerometer
 ) {
-    const bool acceleration_agrees = vector_distance(
-        left.acceleration_body_m_s2, right.acceleration_body_m_s2, 3
-    ) <= config.acceleration_disagreement_m_s2;
-    const bool gyro_agrees = vector_distance(
-        left.gyro_body_rad_s, right.gyro_body_rad_s, 3
-    ) <= config.gyro_disagreement_rad_s;
-    if (!acceleration_agrees) {
-        disagreement_flags |= FSW_DISAGREEMENT_ACCELERATION;
-    }
-    if (!gyro_agrees) {
-        disagreement_flags |= FSW_DISAGREEMENT_GYRO;
-    }
-    return acceleration_agrees && gyro_agrees;
+    return vector_distance(
+        imu_values(left, accelerometer),
+        imu_values(right, accelerometer),
+        3
+    ) <= threshold;
 }
 
 bool magnetometer_samples_agree(
@@ -308,10 +311,18 @@ bool magnetometer_samples_agree(
     ) <= config.magnetic_disagreement;
 }
 
-void average_imus(
+struct ImuComponentVote {
+    bool valid{};
+    std::array<double, 3> value{};
+    double sample_time_s{-1.0};
+    uint32_t usable_mask{};
+};
+
+void average_imu_component(
     const FswSensorSuite& suite,
     uint32_t mask,
-    VotedSensors& voted
+    bool accelerometer,
+    ImuComponentVote& vote
 ) {
     const double divisor = static_cast<double>(bit_count(mask));
     for (uint32_t index = 0; index < suite.imu_count; ++index) {
@@ -320,35 +331,39 @@ void average_imus(
         }
         const auto& sample = suite.imus[index];
         for (int axis = 0; axis < 3; ++axis) {
-            voted.acceleration[axis] +=
-                sample.acceleration_body_m_s2[axis] / divisor;
-            voted.gyro[axis] += sample.gyro_body_rad_s[axis] / divisor;
+            vote.value[axis] +=
+                imu_values(sample, accelerometer)[axis] / divisor;
         }
-        voted.imu_sample_time_s = std::max(
-            voted.imu_sample_time_s, sample.sample_time_s
+        vote.sample_time_s = std::max(
+            vote.sample_time_s, sample.sample_time_s
         );
     }
-    voted.imu_usable_mask = mask;
-    voted.imu_valid = mask != 0;
+    vote.usable_mask = mask;
+    vote.valid = mask != 0;
 }
 
-void vote_imus(
+ImuComponentVote vote_imu_component(
     Context& context,
     const FswSensorSuite& suite,
-    VotedSensors& voted
+    std::array<ChannelHealth, FSW_MAX_SENSOR_CHANNELS>& health,
+    bool accelerometer,
+    double disagreement_threshold,
+    uint32_t disagreement_flag,
+    uint32_t& disagreement_flags
 ) {
     uint32_t fresh_mask = 0;
     uint32_t healthy_mask = 0;
     for (uint32_t index = 0; index < suite.imu_count; ++index) {
         const auto& sample = suite.imus[index];
-        if (evaluate_imu_channel(
-            context.sensors.imu_health[index],
+        if (evaluate_imu_component(
+            health[index],
             sample,
             suite.time_s,
-            context.config
+            context.config,
+            accelerometer
         )) {
             fresh_mask |= 1u << index;
-            if (!context.sensors.imu_health[index].rejected) {
+            if (!health[index].rejected) {
                 healthy_mask |= 1u << index;
             }
         }
@@ -366,50 +381,34 @@ void vote_imus(
                 indices[found++] = static_cast<int>(index);
             }
         }
-        if (imu_samples_agree(
+        if (imu_components_agree(
             suite.imus[indices[0]],
             suite.imus[indices[1]],
-            context.config,
-            voted.disagreement_flags
+            disagreement_threshold,
+            accelerometer
         )) {
             consensus_mask = healthy_mask;
+        } else {
+            disagreement_flags |= disagreement_flag;
         }
     } else if (healthy_count == 3) {
-        double acceleration_median[3]{};
-        double gyro_median[3]{};
+        double median[3]{};
         for (int axis = 0; axis < 3; ++axis) {
-            acceleration_median[axis] = median3(
-                suite.imus[0].acceleration_body_m_s2[axis],
-                suite.imus[1].acceleration_body_m_s2[axis],
-                suite.imus[2].acceleration_body_m_s2[axis]
-            );
-            gyro_median[axis] = median3(
-                suite.imus[0].gyro_body_rad_s[axis],
-                suite.imus[1].gyro_body_rad_s[axis],
-                suite.imus[2].gyro_body_rad_s[axis]
+            median[axis] = median3(
+                imu_values(suite.imus[0], accelerometer)[axis],
+                imu_values(suite.imus[1], accelerometer)[axis],
+                imu_values(suite.imus[2], accelerometer)[axis]
             );
         }
         for (uint32_t index = 0; index < suite.imu_count; ++index) {
-            const bool acceleration_agrees = vector_distance(
-                suite.imus[index].acceleration_body_m_s2,
-                acceleration_median,
+            if (vector_distance(
+                imu_values(suite.imus[index], accelerometer),
+                median,
                 3
-            ) <= context.config.acceleration_disagreement_m_s2;
-            const bool gyro_agrees = vector_distance(
-                suite.imus[index].gyro_body_rad_s,
-                gyro_median,
-                3
-            ) <= context.config.gyro_disagreement_rad_s;
-            if (acceleration_agrees && gyro_agrees) {
+            ) <= disagreement_threshold) {
                 consensus_mask |= 1u << index;
             } else {
-                if (!acceleration_agrees) {
-                    voted.disagreement_flags |=
-                        FSW_DISAGREEMENT_ACCELERATION;
-                }
-                if (!gyro_agrees) {
-                    voted.disagreement_flags |= FSW_DISAGREEMENT_GYRO;
-                }
+                disagreement_flags |= disagreement_flag;
             }
         }
         if (bit_count(consensus_mask) < 2) {
@@ -417,46 +416,85 @@ void vote_imus(
         }
     }
 
+    ImuComponentVote vote{};
     if (consensus_mask != 0) {
-        average_imus(suite, consensus_mask, voted);
+        average_imu_component(
+            suite, consensus_mask, accelerometer, vote
+        );
     }
     for (uint32_t index = 0; index < suite.imu_count; ++index) {
         if ((fresh_mask & (1u << index)) == 0) {
             continue;
         }
-        auto& health = context.sensors.imu_health[index];
-        if (!new_sample(health, suite.imus[index].sample_time_s)) {
+        auto& channel = health[index];
+        if (!new_sample(channel, suite.imus[index].sample_time_s)) {
             continue;
         }
         bool agrees = (consensus_mask & (1u << index)) != 0;
         if (!agrees) {
-            health.flags |= FSW_SENSOR_HEALTH_DISAGREEMENT;
+            channel.flags |= FSW_SENSOR_HEALTH_DISAGREEMENT;
         }
-        if (health.rejected && voted.imu_valid) {
+        if (channel.rejected && vote.valid) {
             FswImuSample fused{};
             for (int axis = 0; axis < 3; ++axis) {
-                fused.acceleration_body_m_s2[axis] =
-                    voted.acceleration[axis];
-                fused.gyro_body_rad_s[axis] = voted.gyro[axis];
+                if (accelerometer) {
+                    fused.acceleration_body_m_s2[axis] = vote.value[axis];
+                } else {
+                    fused.gyro_body_rad_s[axis] = vote.value[axis];
+                }
             }
-            uint32_t ignored_flags = 0;
-            agrees = imu_samples_agree(
+            agrees = imu_components_agree(
                 suite.imus[index],
                 fused,
-                context.config,
-                ignored_flags
+                disagreement_threshold,
+                accelerometer
             );
         }
         observe_channel(
-            health,
+            channel,
             agrees,
             healthy_count >= 3,
             context.config
         );
-        if (health.rejected) {
-            health.flags |= FSW_SENSOR_HEALTH_REJECTED;
+        if (channel.rejected) {
+            channel.flags |= FSW_SENSOR_HEALTH_REJECTED;
         }
     }
+    return vote;
+}
+
+void vote_imus(
+    Context& context,
+    const FswSensorSuite& suite,
+    VotedSensors& voted
+) {
+    const ImuComponentVote accelerometer = vote_imu_component(
+        context,
+        suite,
+        context.sensors.accelerometer_health,
+        true,
+        context.config.acceleration_disagreement_m_s2,
+        FSW_DISAGREEMENT_ACCELERATION,
+        voted.disagreement_flags
+    );
+    const ImuComponentVote gyroscope = vote_imu_component(
+        context,
+        suite,
+        context.sensors.gyroscope_health,
+        false,
+        context.config.gyro_disagreement_rad_s,
+        FSW_DISAGREEMENT_GYRO,
+        voted.disagreement_flags
+    );
+    voted.accelerometer_valid = accelerometer.valid;
+    voted.gyroscope_valid = gyroscope.valid;
+    voted.imu_valid = accelerometer.valid && gyroscope.valid;
+    voted.acceleration = accelerometer.value;
+    voted.gyro = gyroscope.value;
+    voted.accelerometer_sample_time_s = accelerometer.sample_time_s;
+    voted.gyroscope_sample_time_s = gyroscope.sample_time_s;
+    voted.accelerometer_usable_mask = accelerometer.usable_mask;
+    voted.gyroscope_usable_mask = gyroscope.usable_mask;
 }
 
 void average_magnetometers(
@@ -911,13 +949,18 @@ VotedSensors vote_sensors(Context& context, const FswSensorSuite& suite) {
     vote_barometers(context, suite, voted);
     vote_gnss(context, suite, voted);
 
-    context.sensors.imu_usable_mask = voted.imu_usable_mask;
+    context.sensors.accelerometer_usable_mask =
+        voted.accelerometer_usable_mask;
+    context.sensors.gyroscope_usable_mask = voted.gyroscope_usable_mask;
     context.sensors.magnetometer_usable_mask =
         voted.magnetometer_usable_mask;
     context.sensors.barometer_usable_mask = voted.barometer_usable_mask;
     context.sensors.gnss_usable_mask = voted.gnss_usable_mask;
-    context.sensors.imu_rejected_mask = rejected_mask(
-        context.sensors.imu_health, suite.imu_count
+    context.sensors.accelerometer_rejected_mask = rejected_mask(
+        context.sensors.accelerometer_health, suite.imu_count
+    );
+    context.sensors.gyroscope_rejected_mask = rejected_mask(
+        context.sensors.gyroscope_health, suite.imu_count
     );
     context.sensors.magnetometer_rejected_mask = rejected_mask(
         context.sensors.magnetometer_health, suite.magnetometer_count
@@ -930,8 +973,13 @@ VotedSensors vote_sensors(Context& context, const FswSensorSuite& suite) {
     );
     context.sensors.disagreement_flags = voted.disagreement_flags;
     context.sensors.sensor_status_flags = 0;
-    if (bit_count(voted.imu_usable_mask) == 1) {
-        context.sensors.sensor_status_flags |= FSW_SENSOR_STATUS_IMU_SINGLE_SOURCE;
+    if (bit_count(voted.accelerometer_usable_mask) == 1) {
+        context.sensors.sensor_status_flags |=
+            FSW_SENSOR_STATUS_ACCELEROMETER_SINGLE_SOURCE;
+    }
+    if (bit_count(voted.gyroscope_usable_mask) == 1) {
+        context.sensors.sensor_status_flags |=
+            FSW_SENSOR_STATUS_GYROSCOPE_SINGLE_SOURCE;
     }
     if (bit_count(voted.magnetometer_usable_mask) == 1) {
         context.sensors.sensor_status_flags |=

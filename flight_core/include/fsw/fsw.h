@@ -115,10 +115,11 @@ enum FswDisagreementFlag {
 };
 
 enum FswSensorStatusFlag {
-    FSW_SENSOR_STATUS_IMU_SINGLE_SOURCE = 1u << 0,
-    FSW_SENSOR_STATUS_BAROMETER_SINGLE_SOURCE = 1u << 1,
-    FSW_SENSOR_STATUS_GNSS_SINGLE_SOURCE = 1u << 2,
-    FSW_SENSOR_STATUS_MAGNETOMETER_SINGLE_SOURCE = 1u << 3
+    FSW_SENSOR_STATUS_ACCELEROMETER_SINGLE_SOURCE = 1u << 0,
+    FSW_SENSOR_STATUS_GYROSCOPE_SINGLE_SOURCE = 1u << 1,
+    FSW_SENSOR_STATUS_BAROMETER_SINGLE_SOURCE = 1u << 2,
+    FSW_SENSOR_STATUS_GNSS_SINGLE_SOURCE = 1u << 3,
+    FSW_SENSOR_STATUS_MAGNETOMETER_SINGLE_SOURCE = 1u << 4
 };
 
 enum FswSensorHealthFlag {
@@ -350,21 +351,25 @@ typedef struct {
     uint32_t inhibit_flags;
     uint32_t event_flags;
     FswDiscreteActuationCommand discrete_actuation;
-    uint32_t imu_usable_mask;
+    uint32_t accelerometer_usable_mask;
+    uint32_t gyroscope_usable_mask;
     uint32_t magnetometer_usable_mask;
     uint32_t barometer_usable_mask;
     uint32_t gnss_usable_mask;
-    uint32_t imu_rejected_mask;
+    uint32_t accelerometer_rejected_mask;
+    uint32_t gyroscope_rejected_mask;
     uint32_t magnetometer_rejected_mask;
     uint32_t barometer_rejected_mask;
     uint32_t gnss_rejected_mask;
     uint32_t disagreement_flags;
     uint32_t sensor_status_flags;
-    uint32_t imu_health_flags[FSW_MAX_SENSOR_CHANNELS];
+    uint32_t accelerometer_health_flags[FSW_MAX_SENSOR_CHANNELS];
+    uint32_t gyroscope_health_flags[FSW_MAX_SENSOR_CHANNELS];
     uint32_t magnetometer_health_flags[FSW_MAX_SENSOR_CHANNELS];
     uint32_t barometer_health_flags[FSW_MAX_SENSOR_CHANNELS];
     uint32_t gnss_health_flags[FSW_MAX_SENSOR_CHANNELS];
-    double imu_age_s[FSW_MAX_SENSOR_CHANNELS];
+    double accelerometer_age_s[FSW_MAX_SENSOR_CHANNELS];
+    double gyroscope_age_s[FSW_MAX_SENSOR_CHANNELS];
     double magnetometer_age_s[FSW_MAX_SENSOR_CHANNELS];
     double barometer_age_s[FSW_MAX_SENSOR_CHANNELS];
     double gnss_age_s[FSW_MAX_SENSOR_CHANNELS];

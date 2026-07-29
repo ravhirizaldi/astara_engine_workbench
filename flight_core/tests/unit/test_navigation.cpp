@@ -1,6 +1,62 @@
 #include "test_support.hpp"
 
+#include "core/context.hpp"
+#include "navigation/navigation.hpp"
+#include "sensors/sensor_voting.hpp"
+
 using namespace fsw_test;
+
+fsw::internal::VotedSensors launch_site_measurement(double time_s) {
+    fsw::internal::VotedSensors voted{};
+    voted.gnss_valid = true;
+    voted.barometer_valid = true;
+    voted.gnss_position = {kEarthRadiusM, 0.0, 0.0};
+    voted.gnss_velocity = {0.0, 0.0, 0.0};
+    voted.barometric_altitude = 0.0;
+    voted.gnss_sample_time_s = time_s;
+    voted.barometer_sample_time_s = time_s;
+    return voted;
+}
+
+void test_launch_site_initialization_and_aiding() {
+    fsw::internal::Context context(default_config());
+    context.timing.step_delta_s = 0.01;
+    auto voted = launch_site_measurement(0.0);
+    REQUIRE(!fsw::internal::update_navigation(context, voted));
+    REQUIRE(context.navigation.initialized);
+    REQUIRE(context.navigation.navigation_status == FSW_NAV_NOMINAL);
+    REQUIRE(context.navigation.position_ecef[0] == kEarthRadiusM);
+    REQUIRE(context.navigation.altitude == 0.0);
+    REQUIRE(context.navigation.attitude_initialized);
+
+    voted = {};
+    voted.barometer_valid = true;
+    voted.barometric_altitude = 100.0;
+    voted.barometer_sample_time_s = 0.10;
+    context.timing.step_delta_s = 0.10;
+    REQUIRE(!fsw::internal::update_navigation(context, voted));
+    REQUIRE(context.navigation.altitude > 0.0);
+    REQUIRE(context.navigation.altitude < 100.0);
+    REQUIRE(context.navigation.navigation_status == FSW_NAV_DEGRADED);
+
+    fsw::internal::Context gnss_context(default_config());
+    gnss_context.timing.step_delta_s = 0.01;
+    voted = launch_site_measurement(0.0);
+    fsw::internal::update_navigation(gnss_context, voted);
+    voted = {};
+    voted.gnss_valid = true;
+    voted.gnss_position = {kEarthRadiusM + 100.0, 0.0, 0.0};
+    voted.gnss_velocity = {10.0, 0.0, 0.0};
+    voted.vertical_velocity = 10.0;
+    voted.gnss_sample_time_s = 0.10;
+    gnss_context.timing.step_delta_s = 0.10;
+    fsw::internal::update_navigation(gnss_context, voted);
+    REQUIRE(gnss_context.navigation.position_ecef[0] > kEarthRadiusM);
+    REQUIRE(gnss_context.navigation.position_ecef[0]
+        < kEarthRadiusM + 100.0);
+    REQUIRE(gnss_context.navigation.velocity_ecef[0] > 0.0);
+    REQUIRE(gnss_context.navigation.navigation_status == FSW_NAV_DEGRADED);
+}
 
 void test_stale_imu_is_not_reintegrated() {
     const FswConfig config = default_config();
@@ -22,6 +78,7 @@ void test_stale_imu_is_not_reintegrated() {
     step(handle, input, output);
     REQUIRE(output.estimated_velocity_ecef_m_s[0] == velocity);
     REQUIRE(output.estimated_attitude_wxyz[3] == attitude_z);
+    REQUIRE(output.navigation_status == FSW_NAV_INERTIAL);
     fsw_destroy(handle);
 }
 
@@ -89,6 +146,7 @@ void test_ecef_gravity_rotation_and_vertical_derivation() {
 }
 
 int main() {
+    test_launch_site_initialization_and_aiding();
     test_stale_imu_is_not_reintegrated();
     test_ecef_gravity_rotation_and_vertical_derivation();
     return EXIT_SUCCESS;

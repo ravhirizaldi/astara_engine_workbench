@@ -1,10 +1,47 @@
 #include "test_support.hpp"
 
+#include <cstddef>
+#include <cstdlib>
 #include <cstring>
+#include <new>
 
 using namespace fsw_test;
 
+namespace {
+
+bool track_allocations = false;
+std::size_t allocation_count = 0;
+
+}  // namespace
+
+void* operator new(std::size_t size) {
+    if (track_allocations) {
+        ++allocation_count;
+    }
+    if (void* pointer = std::malloc(size)) {
+        return pointer;
+    }
+    throw std::bad_alloc();
+}
+
+void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
+    if (track_allocations) {
+        ++allocation_count;
+    }
+    return std::malloc(size);
+}
+
+void operator delete(void* pointer) noexcept {
+    std::free(pointer);
+}
+
+void operator delete(void* pointer, std::size_t) noexcept {
+    std::free(pointer);
+}
+
 void test_abi_contract_and_release_active_requirements() {
+    REQUIRE(fsw_create(nullptr) == nullptr);
+    fsw_reset(nullptr);
     REQUIRE(
         fsw_step(nullptr, nullptr, nullptr)
         == FSW_STATUS_INVALID_ARGUMENT
@@ -23,9 +60,16 @@ void test_abi_contract_and_release_active_requirements() {
     FswConfig bad_config = default_config();
     bad_config.abi_version = 0;
     REQUIRE(fsw_create(&bad_config) == nullptr);
+    bad_config = default_config();
+    bad_config.struct_size = sizeof(FswConfig) - 1;
+    REQUIRE(fsw_create(&bad_config) == nullptr);
     const FswConfig config = default_config();
+    allocation_count = 0;
+    track_allocations = true;
     FswHandle handle = fsw_create(&config);
+    track_allocations = false;
     REQUIRE(handle != nullptr);
+    REQUIRE(allocation_count == 1);
     FswOutput output{};
     output.stage1_ignite = 1;
     REQUIRE(
@@ -47,7 +91,28 @@ void test_abi_contract_and_release_active_requirements() {
     REQUIRE(!output.output_valid);
     REQUIRE(!output.stage1_ignite);
     REQUIRE(!output.discrete_actuation.valid);
+
+    input = input_at(0.0);
+    input.struct_size = sizeof(FswInput) - 1;
+    REQUIRE(
+        fsw_step(handle, &input, &output) == FSW_STATUS_ABI_MISMATCH
+    );
+    REQUIRE(!output.output_valid);
+
+    input = input_at(0.0);
+    allocation_count = 0;
+    track_allocations = true;
+    const int32_t status = fsw_step(handle, &input, &output);
+    track_allocations = false;
+    REQUIRE(status == FSW_STATUS_OK);
+    REQUIRE(allocation_count == 0);
+    REQUIRE(output.output_valid);
+    REQUIRE(output.abi_version == FSW_ABI_VERSION);
+    REQUIRE(output.struct_size == sizeof(FswOutput));
+    REQUIRE(output.accelerometer_usable_mask == 1);
+    REQUIRE(output.gyroscope_usable_mask == 1);
     fsw_destroy(handle);
+    fsw_destroy(nullptr);
 }
 
 void test_reset_matches_fresh_context() {
@@ -82,6 +147,14 @@ void test_reset_matches_fresh_context() {
 int main() {
     REQUIRE(fsw_abi_version() == FSW_ABI_VERSION);
     REQUIRE(std::strcmp(fsw_version(), FSW_VERSION_STRING) == 0);
+    REQUIRE(
+        offsetof(FswOutput, accelerometer_usable_mask)
+        < offsetof(FswOutput, gyroscope_usable_mask)
+    );
+    REQUIRE(
+        offsetof(FswOutput, accelerometer_health_flags)
+        < offsetof(FswOutput, gyroscope_health_flags)
+    );
     test_abi_contract_and_release_active_requirements();
     test_reset_matches_fresh_context();
     return EXIT_SUCCESS;

@@ -5,6 +5,7 @@ from unittest import mock
 from aerospace_workbench.flight_software.abi import (
     FSW_COMMAND_ARM,
     FSW_COMMAND_LAUNCH,
+    FswOutput,
     SensorFrame,
 )
 from aerospace_workbench.flight_software.bridge import (
@@ -184,11 +185,14 @@ class FlightCoreTests(unittest.TestCase):
             self.assertEqual(output.mode, 3)
             self.assertEqual(output.navigation_status, 0)
             self.assertEqual(output.attitude_valid, 1)
-            self.assertEqual(output.imu_usable_mask, 1)
+            self.assertEqual(output.accelerometer_usable_mask, 1)
+            self.assertEqual(output.gyroscope_usable_mask, 1)
             self.assertEqual(output.barometer_usable_mask, 1)
             self.assertEqual(output.gnss_usable_mask, 1)
-            self.assertEqual(output.sensor_status_flags, 0b1111)
-            self.assertEqual(output.imu_rejected_mask, 0)
+            self.assertEqual(output.sensor_status_flags, 0b11111)
+            self.assertEqual(output.struct_size, ctypes.sizeof(FswOutput))
+            self.assertEqual(output.accelerometer_rejected_mask, 0)
+            self.assertEqual(output.gyroscope_rejected_mask, 0)
             self.assertEqual(output.disagreement_flags, 0)
             self.assertLessEqual(abs(output.tvc_pitch_rad), 0.11)
             with self.assertRaisesRegex(RuntimeError, "status -2"):

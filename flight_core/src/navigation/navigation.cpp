@@ -41,32 +41,34 @@ bool update_navigation(
         context.timing.last_barometer_sample_time_s = voted.barometer_valid
             ? voted.barometer_sample_time_s
             : -1.0;
-        context.timing.last_integrated_imu_sample_time_s = voted.imu_valid
-            ? voted.imu_sample_time_s
+        context.timing.last_integrated_accelerometer_sample_time_s =
+            voted.accelerometer_valid
+            ? voted.accelerometer_sample_time_s
+            : -1.0;
+        context.timing.last_integrated_gyroscope_sample_time_s =
+            voted.gyroscope_valid
+            ? voted.gyroscope_sample_time_s
             : -1.0;
     }
 
     context.navigation.attitude_valid =
-        context.navigation.attitude_initialized && voted.imu_valid;
-    const bool newer_imu = voted.imu_valid
+        context.navigation.attitude_initialized && voted.gyroscope_valid;
+    const bool newer_gyroscope = voted.gyroscope_valid
         && context.navigation.initialized
-        && voted.imu_sample_time_s
-            > context.timing.last_integrated_imu_sample_time_s + kEpsilon;
-    if (newer_imu) {
-        const double imu_delta_s =
-            context.timing.last_integrated_imu_sample_time_s < 0.0
+        && voted.gyroscope_sample_time_s
+            > context.timing.last_integrated_gyroscope_sample_time_s
+                + kEpsilon;
+    if (newer_gyroscope) {
+        const double gyroscope_delta_s =
+            context.timing.last_integrated_gyroscope_sample_time_s < 0.0
                 ? context.timing.step_delta_s
-                : voted.imu_sample_time_s
-                    - context.timing.last_integrated_imu_sample_time_s;
-        update_gyro_bias(context, voted, imu_delta_s);
+                : voted.gyroscope_sample_time_s
+                    - context.timing.last_integrated_gyroscope_sample_time_s;
+        update_gyro_bias(context, voted, gyroscope_delta_s);
         std::array<double, 3> corrected_gyro{};
-        std::array<double, 3> corrected_acceleration{};
         for (int axis = 0; axis < 3; ++axis) {
             corrected_gyro[axis] =
                 voted.gyro[axis] - context.navigation.gyro_bias[axis];
-            corrected_acceleration[axis] =
-                voted.acceleration[axis]
-                - context.navigation.accelerometer_bias[axis];
         }
         const std::array<double, 3> earth_rate{
             0.0, 0.0, kEarthRotationRadS
@@ -79,10 +81,48 @@ bool update_navigation(
             ecef_relative_gyro[axis] =
                 corrected_gyro[axis] - earth_rate_body[axis];
         }
-        integrate_attitude(context, ecef_relative_gyro, imu_delta_s);
+        integrate_attitude(
+            context, ecef_relative_gyro, gyroscope_delta_s
+        );
+        context.timing.last_integrated_gyroscope_sample_time_s =
+            voted.gyroscope_sample_time_s;
+        const double attitude_process =
+            context.config.gyro_process_sigma_rad_s * gyroscope_delta_s;
+        for (double& variance : context.navigation.attitude_variance) {
+            variance += attitude_process * attitude_process;
+        }
+    } else if (!voted.gyroscope_valid) {
+        for (double& variance : context.navigation.attitude_variance) {
+            variance += context.config.max_attitude_sigma_rad
+                * context.config.max_attitude_sigma_rad
+                * context.timing.step_delta_s;
+        }
+    }
+
+    const bool newer_accelerometer = voted.accelerometer_valid
+        && context.navigation.initialized
+        && voted.accelerometer_sample_time_s
+            > context.timing.last_integrated_accelerometer_sample_time_s
+                + kEpsilon;
+    if (newer_accelerometer) {
+        const double accelerometer_delta_s =
+            context.timing.last_integrated_accelerometer_sample_time_s < 0.0
+                ? context.timing.step_delta_s
+                : voted.accelerometer_sample_time_s
+                    - context.timing
+                        .last_integrated_accelerometer_sample_time_s;
+        std::array<double, 3> corrected_acceleration{};
+        for (int axis = 0; axis < 3; ++axis) {
+            corrected_acceleration[axis] =
+                voted.acceleration[axis]
+                - context.navigation.accelerometer_bias[axis];
+        }
         const auto specific_force_ecef = rotate(
             context.navigation.attitude, corrected_acceleration
         );
+        const std::array<double, 3> earth_rate{
+            0.0, 0.0, kEarthRotationRadS
+        };
         const double radius = std::max(
             vector_norm(context.navigation.position_ecef.data(), 3),
             kEarthRadiusM
@@ -104,32 +144,23 @@ bool update_navigation(
                 - 2.0 * coriolis[axis]
                 - centrifugal[axis];
             context.navigation.position_ecef[axis] +=
-                context.navigation.velocity_ecef[axis] * imu_delta_s
+                context.navigation.velocity_ecef[axis]
+                    * accelerometer_delta_s
                 + 0.5 * acceleration_ecef
-                    * imu_delta_s * imu_delta_s;
+                    * accelerometer_delta_s * accelerometer_delta_s;
             context.navigation.velocity_ecef[axis] +=
-                acceleration_ecef * imu_delta_s;
+                acceleration_ecef * accelerometer_delta_s;
         }
-        context.timing.last_integrated_imu_sample_time_s =
-            voted.imu_sample_time_s;
-        const double attitude_process =
-            context.config.gyro_process_sigma_rad_s * imu_delta_s;
-        for (double& variance : context.navigation.attitude_variance) {
-            variance += attitude_process * attitude_process;
-        }
+        context.timing.last_integrated_accelerometer_sample_time_s =
+            voted.accelerometer_sample_time_s;
         const double velocity_process =
             context.config.accelerometer_process_sigma_m_s2
-            * imu_delta_s;
+            * accelerometer_delta_s;
         context.navigation.velocity_variance +=
             velocity_process * velocity_process;
         context.navigation.altitude_variance +=
-            context.navigation.velocity_variance * imu_delta_s * imu_delta_s;
-    } else if (!voted.imu_valid) {
-        for (double& variance : context.navigation.attitude_variance) {
-            variance += context.config.max_attitude_sigma_rad
-                * context.config.max_attitude_sigma_rad
-                * context.timing.step_delta_s;
-        }
+            context.navigation.velocity_variance
+                * accelerometer_delta_s * accelerometer_delta_s;
     }
 
     bool use_barometer = voted.barometer_valid;

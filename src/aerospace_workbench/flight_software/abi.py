@@ -7,7 +7,7 @@ import ctypes
 FSW_MAX_GUIDANCE_POINTS = 32
 FSW_MAX_SENSOR_CHANNELS = 3
 FSW_FAULT_COUNT = 21
-FSW_ABI_VERSION = 0x00050000
+FSW_ABI_VERSION = 0x00060000
 FSW_BODY_INTEGRATED = 0
 FSW_BODY_CORE = 1
 FSW_BODY_UPPER = 2
@@ -279,24 +279,31 @@ class FswOutput(ctypes.Structure):
         ("inhibit_flags", ctypes.c_uint32),
         ("event_flags", ctypes.c_uint32),
         ("discrete_actuation", FswDiscreteActuationCommand),
-        ("imu_usable_mask", ctypes.c_uint32),
+        ("accelerometer_usable_mask", ctypes.c_uint32),
+        ("gyroscope_usable_mask", ctypes.c_uint32),
         ("magnetometer_usable_mask", ctypes.c_uint32),
         ("barometer_usable_mask", ctypes.c_uint32),
         ("gnss_usable_mask", ctypes.c_uint32),
-        ("imu_rejected_mask", ctypes.c_uint32),
+        ("accelerometer_rejected_mask", ctypes.c_uint32),
+        ("gyroscope_rejected_mask", ctypes.c_uint32),
         ("magnetometer_rejected_mask", ctypes.c_uint32),
         ("barometer_rejected_mask", ctypes.c_uint32),
         ("gnss_rejected_mask", ctypes.c_uint32),
         ("disagreement_flags", ctypes.c_uint32),
         ("sensor_status_flags", ctypes.c_uint32),
-        ("imu_health_flags", ctypes.c_uint32 * FSW_MAX_SENSOR_CHANNELS),
+        (
+            "accelerometer_health_flags",
+            ctypes.c_uint32 * FSW_MAX_SENSOR_CHANNELS,
+        ),
+        ("gyroscope_health_flags", ctypes.c_uint32 * FSW_MAX_SENSOR_CHANNELS),
         (
             "magnetometer_health_flags",
             ctypes.c_uint32 * FSW_MAX_SENSOR_CHANNELS,
         ),
         ("barometer_health_flags", ctypes.c_uint32 * FSW_MAX_SENSOR_CHANNELS),
         ("gnss_health_flags", ctypes.c_uint32 * FSW_MAX_SENSOR_CHANNELS),
-        ("imu_age_s", ctypes.c_double * FSW_MAX_SENSOR_CHANNELS),
+        ("accelerometer_age_s", ctypes.c_double * FSW_MAX_SENSOR_CHANNELS),
+        ("gyroscope_age_s", ctypes.c_double * FSW_MAX_SENSOR_CHANNELS),
         ("magnetometer_age_s", ctypes.c_double * FSW_MAX_SENSOR_CHANNELS),
         ("barometer_age_s", ctypes.c_double * FSW_MAX_SENSOR_CHANNELS),
         ("gnss_age_s", ctypes.c_double * FSW_MAX_SENSOR_CHANNELS),

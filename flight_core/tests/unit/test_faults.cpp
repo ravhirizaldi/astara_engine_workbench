@@ -1,6 +1,61 @@
 #include "test_support.hpp"
 
+#include "core/context.hpp"
+#include "faults/fault_manager.hpp"
+
 using namespace fsw_test;
+
+void test_active_cleared_latched_and_occurrence_counters() {
+    fsw::internal::Context context(default_config());
+    const uint32_t fault = FSW_FAULT_GNSS_UNAVAILABLE;
+    fsw::internal::commit_faults(context, fault);
+    REQUIRE(context.faults.active_fault_flags == fault);
+    REQUIRE(context.faults.latched_fault_flags == fault);
+    REQUIRE(context.faults.changed_fault_flags == fault);
+    REQUIRE(context.faults.fault_occurrence_count[0] == 1);
+
+    fsw::internal::commit_faults(context, fault);
+    REQUIRE(context.faults.changed_fault_flags == 0);
+    REQUIRE(context.faults.fault_occurrence_count[0] == 1);
+
+    fsw::internal::commit_faults(context, 0);
+    REQUIRE(context.faults.active_fault_flags == 0);
+    REQUIRE(context.faults.latched_fault_flags == fault);
+    REQUIRE(context.faults.changed_fault_flags == fault);
+
+    fsw::internal::commit_faults(context, fault);
+    REQUIRE(context.faults.fault_occurrence_count[0] == 2);
+}
+
+void test_deadline_overruns_and_watchdog_failure() {
+    const FswConfig config = default_config();
+    FswHandle handle = fsw_create(&config);
+    REQUIRE(handle != nullptr);
+    FswOutput output{};
+    auto input = input_at(0.0);
+    step(handle, input, output);
+
+    input = input_at(0.01);
+    input.platform.deadline_missed = 1;
+    step(handle, input, output);
+    REQUIRE(output.active_fault_flags & FSW_FAULT_DEADLINE_OVERRUN);
+    REQUIRE(output.consecutive_overruns == 1);
+    REQUIRE(output.fault_occurrence_count[12] == 1);
+
+    input = input_at(0.02);
+    input.platform.previous_execution_time_s =
+        config.loop_deadline_s + 0.001;
+    step(handle, input, output);
+    REQUIRE(output.consecutive_overruns == 2);
+    REQUIRE(output.fault_occurrence_count[12] == 1);
+
+    input = input_at(0.03);
+    input.platform.watchdog_healthy = 0;
+    step(handle, input, output);
+    REQUIRE(output.active_fault_flags & FSW_FAULT_WATCHDOG);
+    REQUIRE(output.latched_fault_flags & FSW_FAULT_WATCHDOG);
+    fsw_destroy(handle);
+}
 
 void test_timing_timeouts_and_zero_safe_rejection() {
     const FswConfig config = default_config();
@@ -104,6 +159,8 @@ void test_one_shot_recovery_commands_and_confirmation_timeout() {
 }
 
 int main() {
+    test_active_cleared_latched_and_occurrence_counters();
+    test_deadline_overruns_and_watchdog_failure();
     test_timing_timeouts_and_zero_safe_rejection();
     test_one_shot_recovery_commands_and_confirmation_timeout();
     return EXIT_SUCCESS;
