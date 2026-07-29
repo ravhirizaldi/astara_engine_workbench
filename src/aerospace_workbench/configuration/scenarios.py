@@ -6,39 +6,110 @@ import copy
 import hashlib
 import json
 import math
+import warnings
 from pathlib import Path
 from typing import Any
 
-from .schemas import VEHICLE_KEYS
+from .schemas import (
+    LEGACY_SCENARIO_SCHEMA_VERSION,
+    SCENARIO_SCHEMA_VERSION,
+    SchemaMigrationWarning,
+    VEHICLE_KEYS,
+    normalize_schema_document,
+)
 from .vehicles import (
     load_vehicle_definition,
     merge_vehicle_definition,
 )
 
+
+class _LoadedScenario(dict[str, Any]):
+    """Runtime scenario carrying non-serialized input provenance."""
+
+    source_files: dict[str, Path]
+
+    def __init__(
+        self, document: dict[str, Any], source_files: dict[str, Path]
+    ) -> None:
+        super().__init__(document)
+        self.source_files = source_files
+
+
+def _repository_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
 def default_scenario_path() -> Path:
     return (
-        Path(__file__).resolve().parents[3]
+        _repository_root()
+        / "configs"
         / "scenarios"
         / "anthariksa_reference_mission.json"
     )
 
 
+def resolve_scenario_path(path: str | Path | None = None) -> Path:
+    """Resolve a scenario path, including the deprecated repository location."""
+    if path is None:
+        return default_scenario_path()
+    candidate = Path(path).expanduser()
+    if candidate.exists():
+        return candidate.resolve()
+
+    root = _repository_root()
+    mapped: Path | None = None
+    if not candidate.is_absolute() and candidate.parts[:1] == ("scenarios",):
+        mapped = root / "configs" / candidate
+    else:
+        absolute = candidate.resolve()
+        legacy_root = root / "scenarios"
+        try:
+            mapped = root / "configs" / "scenarios" / absolute.relative_to(
+                legacy_root
+            )
+        except ValueError:
+            pass
+    if mapped is not None and mapped.exists():
+        warnings.warn(
+            f"scenario path {path!s} is deprecated; use {mapped}",
+            SchemaMigrationWarning,
+            stacklevel=2,
+        )
+        return mapped.resolve()
+    return candidate.resolve()
+
+
 def load_scenario_documents(
     path: str | Path | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None, Path | None]:
-    source = Path(path) if path else default_scenario_path()
+    source = resolve_scenario_path(path)
     scenario = json.loads(source.read_text(encoding="utf-8"))
-    vehicle, vehicle_path = load_vehicle_definition(scenario, source)
+    source_schema = normalize_schema_document(
+        scenario, SCENARIO_SCHEMA_VERSION, source
+    )
+    vehicle, vehicle_path = load_vehicle_definition(
+        scenario,
+        source,
+        allow_inline=source_schema == LEGACY_SCENARIO_SCHEMA_VERSION,
+    )
     return scenario, vehicle, vehicle_path
 
 
 def load_scenario(path: str | Path | None = None) -> dict[str, Any]:
-    scenario, vehicle, _vehicle_path = load_scenario_documents(path)
-    merge_vehicle_definition(scenario, vehicle)
+    source = resolve_scenario_path(path)
+    scenario, vehicle, vehicle_path = load_scenario_documents(source)
+    loaded = _LoadedScenario(
+        scenario,
+        {
+            "scenario": source,
+            **({"vehicle": vehicle_path} if vehicle_path is not None else {}),
+        },
+    )
+    merge_vehicle_definition(loaded, vehicle)
     from .validation import validate_scenario
 
-    validate_scenario(scenario)
-    return scenario
+    validate_scenario(loaded)
+    return loaded
 
 
 def default_scenario() -> dict[str, Any]:
@@ -57,6 +128,11 @@ def scenario_hash(scenario: dict[str, Any]) -> str:
         ).hexdigest()
     encoded = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
+
+
+def configuration_source_files(scenario: dict[str, Any]) -> dict[str, Path]:
+    """Return file-backed input provenance without serializing it."""
+    return dict(getattr(scenario, "source_files", {}))
 
 
 def resolve_mission_events(scenario: dict[str, Any]) -> dict[str, float]:
@@ -130,7 +206,7 @@ def resolve_mission_events(scenario: dict[str, Any]) -> dict[str, float]:
 
 
 def model_source_hash() -> str:
-    root = Path(__file__).resolve().parents[3]
+    root = _repository_root()
     paths = sorted((root / "src" / "aerospace_workbench").rglob("*.py"))
     paths.extend(
         (

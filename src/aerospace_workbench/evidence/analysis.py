@@ -22,10 +22,14 @@ from ..configuration.scenarios import (
 )
 from ..configuration.schemas import CREDIBILITY_SCHEMA_VERSION
 from ..configuration.validation import validate_scenario
-from ..configuration.vehicles import evidence_documents
 from ..flight_software.build import build_library
 from ..simulation.runner import RunResult, run_simulation
-from .artifacts import artifact_hashes, write_csv, write_json
+from .artifacts import (
+    artifact_hashes,
+    write_configuration_artifacts,
+    write_csv,
+    write_json,
+)
 from .retention import same_metric, selected_success_samples
 
 PERCENTILE_METRICS = (
@@ -611,10 +615,9 @@ def run_credibility_analysis(
     write_csv(output_dir / "monte_carlo.csv", monte_carlo_rows)
     if retained_rows:
         write_csv(output_dir / "retained_runs.csv", retained_rows)
-    scenario_document, vehicle_document = evidence_documents(scenario)
-    write_json(output_dir / "scenario.json", scenario_document)
-    if vehicle_document is not None:
-        write_json(output_dir / "vehicle_definition.json", vehicle_document)
+    configuration_artifacts = write_configuration_artifacts(
+        output_dir, scenario
+    )
 
     status_counts = Counter(str(row["status"]) for row in monte_carlo_rows)
     reason_counts = Counter(
@@ -679,14 +682,9 @@ def run_credibility_analysis(
     }
 
     artifact_paths = [
-        output_dir / "scenario.json",
+        *configuration_artifacts,
         output_dir / "convergence.csv",
         output_dir / "monte_carlo.csv",
-        *(
-            [output_dir / "vehicle_definition.json"]
-            if vehicle_document is not None
-            else []
-        ),
         *([output_dir / "retained_runs.csv"] if retained_rows else []),
         *error_artifacts,
     ]

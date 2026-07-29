@@ -11,23 +11,26 @@ from .schemas import (
     SCENARIO_SCHEMA_VERSION,
     VEHICLE_KEYS,
     VEHICLE_SCHEMA_VERSION,
+    normalize_schema_document,
 )
 
 
 def load_vehicle_definition(
-    scenario: dict[str, Any], scenario_path: Path
+    scenario: dict[str, Any],
+    scenario_path: Path,
+    *,
+    allow_inline: bool = False,
 ) -> tuple[dict[str, Any] | None, Path | None]:
     reference = scenario.get("vehicle_definition")
     if reference is None:
-        return None, None
+        if allow_inline:
+            return None, None
+        raise ValueError("vehicle_definition is required")
     if not isinstance(reference, str) or not reference:
         raise ValueError("vehicle_definition must be a nonempty path string")
     vehicle_path = (scenario_path.parent / reference).resolve()
     vehicle = json.loads(vehicle_path.read_text(encoding="utf-8"))
-    if vehicle.get("schema_version") != VEHICLE_SCHEMA_VERSION:
-        raise ValueError(
-            f"vehicle schema_version must be {VEHICLE_SCHEMA_VERSION!r}"
-        )
+    normalize_schema_document(vehicle, VEHICLE_SCHEMA_VERSION, vehicle_path)
     for key in VEHICLE_KEYS:
         if key not in vehicle:
             raise ValueError(f"vehicle definition is missing {key!r}")
@@ -51,11 +54,13 @@ def evidence_documents(
     scenario: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     scenario_document = copy.deepcopy(scenario)
-    if scenario_document.get("schema_version") != SCENARIO_SCHEMA_VERSION:
+    normalize_schema_document(scenario_document, SCENARIO_SCHEMA_VERSION)
+    if not all(key in scenario_document for key in VEHICLE_KEYS):
         return scenario_document, None
+    reference = scenario_document.get("vehicle_definition", "inline_vehicle")
     vehicle_document = {
         "schema_version": VEHICLE_SCHEMA_VERSION,
-        "name": Path(str(scenario_document["vehicle_definition"])).stem,
+        "name": Path(str(reference)).stem,
         **{key: scenario_document.pop(key) for key in VEHICLE_KEYS},
     }
     scenario_document["vehicle_definition"] = "vehicle_definition.json"

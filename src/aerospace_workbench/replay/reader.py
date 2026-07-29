@@ -5,9 +5,16 @@ from __future__ import annotations
 import csv
 import gzip
 import itertools
+import warnings
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator, TextIO
+from typing import Iterable, Iterator, TextIO
+
+from ..configuration.schemas import (
+    SENSOR_STREAM_SCHEMA_VERSION,
+    SchemaMigrationWarning,
+    normalize_schema_identifier,
+)
 
 
 def load_recorded_commands(
@@ -37,7 +44,7 @@ def open_sensor_log(path: Path) -> Iterator[csv.DictReader]:
 
 
 def grouped_sensor_rows(
-    rows: csv.DictReader,
+    rows: Iterable[dict[str, str]],
 ) -> Iterator[list[dict[str, str]]]:
     groups = itertools.groupby(
         rows,
@@ -48,3 +55,31 @@ def grouped_sensor_rows(
     )
     for _, row_group in groups:
         yield list(row_group)
+
+
+def normalized_sensor_rows(
+    rows: Iterable[dict[str, str]], source: Path
+) -> Iterator[dict[str, str]]:
+    """Normalize legacy stream identifiers while preserving row contents."""
+    warned: set[str | None] = set()
+    for row in rows:
+        identifier = row.get("schema_version") or None
+        if identifier is None:
+            if identifier not in warned:
+                warnings.warn(
+                    f"schema-less sensor stream {source} is deprecated; "
+                    f"use {SENSOR_STREAM_SCHEMA_VERSION!r}",
+                    SchemaMigrationWarning,
+                    stacklevel=2,
+                )
+                warned.add(identifier)
+            row["schema_version"] = SENSOR_STREAM_SCHEMA_VERSION
+        elif identifier != SENSOR_STREAM_SCHEMA_VERSION:
+            if identifier not in warned:
+                row["schema_version"] = normalize_schema_identifier(
+                    identifier, SENSOR_STREAM_SCHEMA_VERSION, source
+                )
+                warned.add(identifier)
+            else:
+                row["schema_version"] = SENSOR_STREAM_SCHEMA_VERSION
+        yield row

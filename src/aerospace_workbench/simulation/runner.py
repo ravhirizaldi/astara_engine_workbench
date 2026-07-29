@@ -22,8 +22,12 @@ from ..configuration.scenarios import (
 )
 from ..configuration.schemas import RUN_SCHEMA_VERSION
 from ..configuration.validation import validate_scenario
-from ..configuration.vehicles import evidence_documents
-from ..evidence.artifacts import sha256_file, write_csv, write_json
+from ..evidence.artifacts import (
+    sha256_file,
+    write_configuration_artifacts,
+    write_csv,
+    write_json,
+)
 from ..evidence.manifest import register_artifacts, write_manifest
 from ..flight_software.abi import (
     FSW_BODY_CORE,
@@ -1280,28 +1284,30 @@ def run_simulation(
         ),
     }
     if persist:
-        scenario_document, vehicle_document = evidence_documents(scenario)
-        write_json(output_dir / "scenario.json", scenario_document)
-        if vehicle_document is not None:
-            write_json(output_dir / "vehicle_definition.json", vehicle_document)
+        configuration_artifacts = write_configuration_artifacts(
+            output_dir, scenario
+        )
         write_manifest(output_dir, manifest)
         write_csv(output_dir / "truth.csv", telemetry)
         write_csv(output_dir / "fsw.csv", fsw_rows)
         write_csv(output_dir / "events.csv", events)
-        artifact_names = [
-            "scenario.json",
-            "sensors.csv.gz",
-            "commands.csv",
-            "truth.csv",
-            "fsw.csv",
-            "events.csv",
+        artifact_paths = [
+            *configuration_artifacts,
+            *(
+                output_dir / filename
+                for filename in (
+                    "sensors.csv.gz",
+                    "commands.csv",
+                    "truth.csv",
+                    "fsw.csv",
+                    "events.csv",
+                )
+            ),
         ]
-        if vehicle_document is not None:
-            artifact_names.append("vehicle_definition.json")
         register_artifacts(
             manifest,
             output_dir,
-            (output_dir / filename for filename in artifact_names),
+            artifact_paths,
         )
         write_manifest(output_dir, manifest)
     result = RunResult(output_dir, manifest, telemetry, fsw_rows, events)

@@ -1,5 +1,5 @@
 {
-  "schema_version": "astara.scenario.v1",
+  "schema_version": "aerospace-workbench.scenario.v1",
   "name": "Anthariksa reference mission",
   "vehicle_definition": "../vehicles/anthariksa_reference_vehicle.json",
   "simulation": {

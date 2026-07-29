@@ -172,7 +172,10 @@ class CredibilityAnalysisTests(unittest.TestCase):
                 [compact(row) for row in rows],
                 [compact(row) for row in serial_rows],
             )
-            self.assertEqual(summary["schema_version"], "astara.credibility.v2")
+            self.assertEqual(
+                summary["schema_version"],
+                "aerospace-workbench.credibility.v2",
+            )
             self.assertEqual(summary["samples"], 2)
             self.assertEqual(summary["seed"], 7)
             self.assertGreaterEqual(summary["execution"]["workers"], 1)
@@ -196,6 +199,14 @@ class CredibilityAnalysisTests(unittest.TestCase):
                     self.assertTrue((run_dir / filename).exists())
             self.assertTrue((output_dir / "convergence.csv").exists())
             self.assertTrue((output_dir / "vehicle_definition.json").exists())
+            self.assertTrue((output_dir / "source_scenario.json").exists())
+            self.assertTrue(
+                (output_dir / "source_vehicle_definition.json").exists()
+            )
+            self.assertIn("source_scenario.json", summary["artifacts"])
+            self.assertIn(
+                "source_vehicle_definition.json", summary["artifacts"]
+            )
 
 
 if __name__ == "__main__":

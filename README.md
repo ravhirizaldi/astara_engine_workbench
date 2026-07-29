@@ -28,8 +28,8 @@ environmental, and flight-test evidence.
 
 - `src/aerospace_workbench/` - responsibility-based Python package for configuration, simulation, FSW, evidence, replay, CLI, and presentation
 - `flight_core/` - dependency-free C++17 flight-software core and CTest check
-- `scenarios/` - versioned SI-unit mission inputs
-- `vehicles/` - stable mass, geometry, propulsion, aerodynamics, sensors, and actuators
+- `configs/scenarios/` - versioned SI-unit mission inputs
+- `configs/vehicles/` - stable mass, geometry, propulsion, aerodynamics, sensors, and actuators
 - `tests/` - Python regression and SIL integration checks
 - `main.py` - ASTARA Engineering Workbench launcher
 - `engine_bench_ui.py` - standalone launcher for the legacy engine dashboard
@@ -79,7 +79,7 @@ awb validate
 awb build-fsw
 awb simulate --seed 1 --no-report
 awb replay runs/<run>/sensors.csv.gz
-awb analyze scenarios/anthariksa_reference_mission.json \
+awb analyze configs/scenarios/anthariksa_reference_mission.json \
   --samples 20 --seed 1
 ```
 
@@ -122,6 +122,8 @@ Each mission creates a unique `runs/` directory containing:
 
 - `scenario.json` and a SHA-256 scenario identity
 - `vehicle_definition.json` as the self-contained stable vehicle snapshot
+- `source_scenario.json` and `source_vehicle_definition.json` as byte-for-byte
+  copies of file-backed inputs
 - `manifest.json` with model version, seed, frames, checks, and artifact hashes
 - `truth.csv`, `sensors.csv.gz`, `commands.csv`, `fsw.csv`, and `events.csv`
 - `rocketpy_reference.json` with an optional independent powered-ascent comparison
@@ -136,7 +138,8 @@ The `analyze` command creates a separate credibility bundle containing:
   2% sample of successful runs
 - `summary.json` with P5/median/P95 ranges, provenance, worker usage, retention
   counts, and convergence status
-- the exact scenario plus SHA-256 artifact identities
+- normalized scenario/vehicle snapshots, original input copies, and SHA-256
+  artifact identities
 
 Monte Carlo samples run in independent processes. Automatic worker selection
 uses process CPU affinity and reserves 25% of logical CPUs for the system: an
@@ -187,18 +190,21 @@ See `docs/REQUIREMENTS.md` for requirement-to-test links,
 Scenario files for ASTARA Engineering Workbench contain run-dependent inputs only: vehicle reference,
 simulation duration/rate/seed, Monte Carlo settings, launch environment, mission
 events, faults, uncertainty, and validation settings. Stable hardware lives in a
-separate `astara.vehicle.v1` file:
+separate `aerospace-workbench.vehicle.v1` file:
 
 ```json
 {
-  "schema_version": "astara.scenario.v1",
+  "schema_version": "aerospace-workbench.scenario.v1",
   "vehicle_definition": "../vehicles/anthariksa_reference_vehicle.json"
 }
 ```
 
 The loader resolves both files before simulation. Run evidence writes separate,
-self-contained `scenario.json` and `vehicle_definition.json` snapshots. Inline
-`astara.scenario.v0` files remain supported.
+self-contained `scenario.json` and `vehicle_definition.json` snapshots with
+canonical schema identifiers while preserving the original files separately.
+Recognized legacy schemas remain readable with a deprecation warning. See
+[`docs/SCHEMA_MIGRATION.md`](docs/SCHEMA_MIGRATION.md) for the migration table
+and compatibility behavior.
 
 ## Digital Twin Scope
 

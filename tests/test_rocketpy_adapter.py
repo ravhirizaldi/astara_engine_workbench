@@ -26,6 +26,10 @@ class RocketPyAdapterTests(unittest.TestCase):
             )
 
             self.assertEqual(comparison["status"], "REFERENCE_ONLY_UNVALIDATED")
+            self.assertEqual(
+                comparison["schema_version"],
+                "aerospace-workbench.rocketpy-reference.v1",
+            )
             self.assertGreater(comparison["rocketpy"]["altitude_m"], 0.0)
             self.assertTrue((Path(directory) / "rocketpy_reference.json").exists())
 

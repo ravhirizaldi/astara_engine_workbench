@@ -68,7 +68,7 @@ with its source and timestamp.
 Run:
 
 ```bash
-awb analyze scenarios/anthariksa_reference_mission.json \
+awb analyze configs/scenarios/anthariksa_reference_mission.json \
   --samples 20 --seed 1
 ```
 
@@ -83,7 +83,9 @@ The command writes:
   successful sample
 - `summary.json`: provenance, declared uncertainty, convergence result, and
   P5/median/P95 result ranges plus CPU/worker and retention counts
-- `scenario.json`: the exact analyzed input
+- `scenario.json` and `vehicle_definition.json`: normalized analyzed snapshots
+- `source_scenario.json` and `source_vehicle_definition.json`: byte-for-byte
+  copies of the file-backed inputs
 
 Monte Carlo samples are embarrassingly parallel and return compact result rows.
 The default worker count uses CPU affinity and reserves 25% of logical CPUs, so

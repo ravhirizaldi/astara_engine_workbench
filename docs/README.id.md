@@ -29,7 +29,7 @@ Menjalankan simulasi tanpa GUI:
 ```bash
 awb validate
 awb build-fsw
-awb simulate scenarios/anthariksa_reference_mission.json --seed 1
+awb simulate configs/scenarios/anthariksa_reference_mission.json --seed 1
 ```
 
 Hasil setiap simulasi disimpan di direktori `runs/` yang unik. Isinya mencakup

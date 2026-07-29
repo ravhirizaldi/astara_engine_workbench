@@ -1,5 +1,5 @@
 {
-  "schema_version": "astara.vehicle.v1",
+  "schema_version": "aerospace-workbench.vehicle.v1",
   "name": "Anthariksa reference vehicle",
   "engine_family": "Cendrawasih",
   "vehicle": {

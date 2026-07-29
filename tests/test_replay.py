@@ -2,8 +2,13 @@ import csv
 import gzip
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
 
+from aerospace_workbench.configuration.schemas import (
+    SENSOR_STREAM_SCHEMA_VERSION,
+    SchemaMigrationWarning,
+)
 from aerospace_workbench.flight_software.abi import (
     SensorFrame,
 )
@@ -25,7 +30,12 @@ class ReplayTests(unittest.TestCase):
             with gzip.open(
                 sensor_path, "wt", newline="", encoding="utf-8"
             ) as file:
-                writer = csv.DictWriter(file, fieldnames=SENSOR_CSV_FIELDS)
+                legacy_fields = tuple(
+                    field
+                    for field in SENSOR_CSV_FIELDS
+                    if field != "schema_version"
+                )
+                writer = csv.DictWriter(file, fieldnames=legacy_fields)
                 writer.writeheader()
                 for index in range(40):
                     frame = SensorFrame(
@@ -55,7 +65,9 @@ class ReplayTests(unittest.TestCase):
                         1,
                         1,
                     )
-                    writer.writerow(sensor_frame_to_row("integrated_stack", frame))
+                    row = sensor_frame_to_row("integrated_stack", frame)
+                    row.pop("schema_version")
+                    writer.writerow(row)
             with (Path(directory) / "commands.csv").open(
                 "w", newline="", encoding="utf-8"
             ) as file:
@@ -79,8 +91,14 @@ class ReplayTests(unittest.TestCase):
                     }
                 )
 
-            first = replay_fsw(scenario, sensor_path, Path(directory) / "first.csv")
-            second = replay_fsw(scenario, sensor_path, Path(directory) / "second.csv")
+            with self.assertWarns(SchemaMigrationWarning):
+                first = replay_fsw(
+                    scenario, sensor_path, Path(directory) / "first.csv"
+                )
+            with self.assertWarns(SchemaMigrationWarning):
+                second = replay_fsw(
+                    scenario, sensor_path, Path(directory) / "second.csv"
+                )
 
             self.assertEqual(first.read_bytes(), second.read_bytes())
             with first.open(newline="", encoding="utf-8") as file:
@@ -110,7 +128,11 @@ class ReplayTests(unittest.TestCase):
             1.4,
         )
         row = sensor_frame_to_row("integrated_stack", frame)
+        self.assertEqual(
+            row["schema_version"], SENSOR_STREAM_SCHEMA_VERSION
+        )
         for field in (
+            "schema_version",
             "barometer_sample_time_s",
             "gnss_sample_time_s",
             "imu_sample_time_s",

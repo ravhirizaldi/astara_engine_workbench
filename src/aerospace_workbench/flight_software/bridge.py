@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from ..configuration.scenarios import resolve_mission_events
+from ..configuration.schemas import SENSOR_STREAM_SCHEMA_VERSION
 from .abi import (
     FSW_ABI_VERSION,
     FSW_BODY_INTEGRATED,
@@ -40,6 +41,7 @@ from .build import build_library
 from .timing import clock_ns
 
 SENSOR_CSV_FIELDS = (
+    "schema_version",
     "body",
     "channel",
     "time_s",
@@ -84,6 +86,7 @@ def sensor_frame_to_row(
     body: str, frame: SensorFrame, channel: int = 0
 ) -> dict[str, float | int | str]:
     return {
+        "schema_version": SENSOR_STREAM_SCHEMA_VERSION,
         "body": body,
         "channel": channel,
         "time_s": frame.time_s,

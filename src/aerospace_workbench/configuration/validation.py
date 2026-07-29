@@ -6,8 +6,9 @@ import math
 from typing import Any
 
 from .schemas import (
-    LEGACY_SCENARIO_SCHEMA_VERSION,
     SCENARIO_SCHEMA_VERSION,
+    VEHICLE_KEYS,
+    normalize_schema_document,
 )
 from .scenarios import resolve_mission_events
 
@@ -100,18 +101,13 @@ def _validate_engines(stage: dict[str, Any], prefix: str) -> float:
 
 
 def validate_scenario(scenario: dict[str, Any]) -> None:
-    if scenario.get("schema_version") not in (
-        SCENARIO_SCHEMA_VERSION,
-        LEGACY_SCENARIO_SCHEMA_VERSION,
+    normalize_schema_document(scenario, SCENARIO_SCHEMA_VERSION)
+    if not isinstance(scenario.get("vehicle_definition"), str) and not all(
+        key in scenario for key in VEHICLE_KEYS
     ):
         raise ValueError(
-            f"schema_version must be {SCENARIO_SCHEMA_VERSION!r} "
-            f"or legacy {LEGACY_SCENARIO_SCHEMA_VERSION!r}"
+            "vehicle_definition or inline vehicle data is required"
         )
-    if scenario.get("schema_version") == SCENARIO_SCHEMA_VERSION and not isinstance(
-        scenario.get("vehicle_definition"), str
-    ):
-        raise ValueError("vehicle_definition is required for scenario v2")
 
     simulation = scenario.get("simulation", {})
     _positive(simulation, ("time_step_s", "max_time_s"), "simulation")

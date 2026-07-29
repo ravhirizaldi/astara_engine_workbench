@@ -21,6 +21,7 @@ from ..configuration.validation import validate_scenario
 from .reader import (
     grouped_sensor_rows,
     load_recorded_commands,
+    normalized_sensor_rows,
     open_sensor_log,
 )
 
@@ -92,7 +93,9 @@ def replay_fsw(
         ):
             writer = csv.DictWriter(destination, fieldnames=REPLAY_FIELDS)
             writer.writeheader()
-            for rows in grouped_sensor_rows(reader):
+            for rows in grouped_sensor_rows(
+                normalized_sensor_rows(reader, sensor_path)
+            ):
                 row = rows[0]
                 body = row.get("body", "")
                 if body not in roles:
