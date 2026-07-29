@@ -5,15 +5,13 @@ from __future__ import annotations
 import csv
 import gzip
 import itertools
-import warnings
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterable, Iterator, TextIO
 
 from ..configuration.schemas import (
     SENSOR_STREAM_SCHEMA_VERSION,
-    SchemaMigrationWarning,
-    normalize_schema_identifier,
+    require_schema_version,
 )
 
 
@@ -57,29 +55,10 @@ def grouped_sensor_rows(
         yield list(row_group)
 
 
-def normalized_sensor_rows(
+def validated_sensor_rows(
     rows: Iterable[dict[str, str]], source: Path
 ) -> Iterator[dict[str, str]]:
-    """Normalize legacy stream identifiers while preserving row contents."""
-    warned: set[str | None] = set()
+    """Yield sensor rows only when they use the required schema."""
     for row in rows:
-        identifier = row.get("schema_version") or None
-        if identifier is None:
-            if identifier not in warned:
-                warnings.warn(
-                    f"schema-less sensor stream {source} is deprecated; "
-                    f"use {SENSOR_STREAM_SCHEMA_VERSION!r}",
-                    SchemaMigrationWarning,
-                    stacklevel=2,
-                )
-                warned.add(identifier)
-            row["schema_version"] = SENSOR_STREAM_SCHEMA_VERSION
-        elif identifier != SENSOR_STREAM_SCHEMA_VERSION:
-            if identifier not in warned:
-                row["schema_version"] = normalize_schema_identifier(
-                    identifier, SENSOR_STREAM_SCHEMA_VERSION, source
-                )
-                warned.add(identifier)
-            else:
-                row["schema_version"] = SENSOR_STREAM_SCHEMA_VERSION
+        require_schema_version(row, SENSOR_STREAM_SCHEMA_VERSION, source)
         yield row

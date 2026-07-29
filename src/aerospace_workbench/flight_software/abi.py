@@ -7,7 +7,7 @@ import ctypes
 FSW_MAX_GUIDANCE_POINTS = 32
 FSW_MAX_SENSOR_CHANNELS = 3
 FSW_FAULT_COUNT = 21
-FSW_ABI_VERSION = 0x00070000
+FSW_ABI_VERSION = 0x00080000
 FSW_BODY_INTEGRATED = 0
 FSW_BODY_CORE = 1
 FSW_BODY_UPPER = 2
@@ -51,6 +51,7 @@ class FswConfig(ctypes.Structure):
         ("propulsion_status_timeout_s", ctypes.c_double),
         ("discrete_feedback_timeout_s", ctypes.c_double),
         ("platform_status_timeout_s", ctypes.c_double),
+        ("max_voter_sample_skew_s", ctypes.c_double),
         ("acceleration_disagreement_m_s2", ctypes.c_double),
         ("gyro_disagreement_rad_s", ctypes.c_double),
         ("magnetic_disagreement", ctypes.c_double),

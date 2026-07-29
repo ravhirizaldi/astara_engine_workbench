@@ -6,16 +6,13 @@ import copy
 import hashlib
 import json
 import math
-import warnings
 from pathlib import Path
 from typing import Any
 
 from .schemas import (
-    LEGACY_SCENARIO_SCHEMA_VERSION,
     SCENARIO_SCHEMA_VERSION,
-    SchemaMigrationWarning,
     VEHICLE_KEYS,
-    normalize_schema_document,
+    require_schema_version,
 )
 from .vehicles import (
     load_vehicle_definition,
@@ -27,13 +24,13 @@ class _LoadedScenario(dict[str, Any]):
     """Runtime scenario carrying non-serialized input provenance."""
 
     source_files: dict[str, Path]
-    vehicle_document: dict[str, Any] | None
+    vehicle_document: dict[str, Any]
 
     def __init__(
         self,
         document: dict[str, Any],
         source_files: dict[str, Path],
-        vehicle_document: dict[str, Any] | None,
+        vehicle_document: dict[str, Any],
     ) -> None:
         super().__init__(document)
         self.source_files = source_files
@@ -54,49 +51,19 @@ def default_scenario_path() -> Path:
 
 
 def resolve_scenario_path(path: str | Path | None = None) -> Path:
-    """Resolve a scenario path, including the deprecated repository location."""
+    """Resolve a scenario path."""
     if path is None:
         return default_scenario_path()
-    candidate = Path(path).expanduser()
-    if candidate.exists():
-        return candidate.resolve()
-
-    root = _repository_root()
-    mapped: Path | None = None
-    if not candidate.is_absolute() and candidate.parts[:1] == ("scenarios",):
-        mapped = root / "configs" / candidate
-    else:
-        absolute = candidate.resolve()
-        legacy_root = root / "scenarios"
-        try:
-            mapped = root / "configs" / "scenarios" / absolute.relative_to(
-                legacy_root
-            )
-        except ValueError:
-            pass
-    if mapped is not None and mapped.exists():
-        warnings.warn(
-            f"scenario path {path!s} is deprecated; use {mapped}",
-            SchemaMigrationWarning,
-            stacklevel=2,
-        )
-        return mapped.resolve()
-    return candidate.resolve()
+    return Path(path).expanduser().resolve()
 
 
 def load_scenario_documents(
     path: str | Path | None = None,
-) -> tuple[dict[str, Any], dict[str, Any] | None, Path | None]:
+) -> tuple[dict[str, Any], dict[str, Any], Path]:
     source = resolve_scenario_path(path)
     scenario = json.loads(source.read_text(encoding="utf-8"))
-    source_schema = normalize_schema_document(
-        scenario, SCENARIO_SCHEMA_VERSION, source
-    )
-    vehicle, vehicle_path = load_vehicle_definition(
-        scenario,
-        source,
-        allow_inline=source_schema == LEGACY_SCENARIO_SCHEMA_VERSION,
-    )
+    require_schema_version(scenario, SCENARIO_SCHEMA_VERSION, source)
+    vehicle, vehicle_path = load_vehicle_definition(scenario, source)
     return scenario, vehicle, vehicle_path
 
 
@@ -107,7 +74,7 @@ def load_scenario(path: str | Path | None = None) -> dict[str, Any]:
         scenario,
         {
             "scenario": source,
-            **({"vehicle": vehicle_path} if vehicle_path is not None else {}),
+            "vehicle": vehicle_path,
         },
         vehicle,
     )
@@ -151,14 +118,6 @@ def resolve_mission_events(scenario: dict[str, Any]) -> dict[str, float]:
         scenario["vehicle"]["stages"][0]["propulsion"]["burn_duration_s"]
     )
     definitions = mission.get("events")
-    if definitions is None:
-        separation = stage1_burn_s + float(mission["separation_delay_s"])
-        return {
-            "burnout_stage_1": stage1_burn_s,
-            "stage_separation": separation,
-            "stage2_ignition": separation
-            + float(mission["stage2_ignition_delay_s"]),
-        }
     if not isinstance(definitions, list) or not definitions:
         raise ValueError("mission.events must contain at least one event")
 

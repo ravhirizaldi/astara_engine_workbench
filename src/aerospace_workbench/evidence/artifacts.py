@@ -44,11 +44,9 @@ def write_configuration_artifacts(
 ) -> list[Path]:
     """Write canonical snapshots and preserve any file-backed inputs."""
     scenario_document, vehicle_document = evidence_documents(scenario)
-    paths = [root / "scenario.json"]
+    paths = [root / "scenario.json", root / "vehicle_definition.json"]
     write_json(paths[0], scenario_document)
-    if vehicle_document is not None:
-        paths.append(root / "vehicle_definition.json")
-        write_json(paths[-1], vehicle_document)
+    write_json(paths[1], vehicle_document)
 
     source_names = {
         "scenario": "source_scenario.json",

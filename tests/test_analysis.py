@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from aerospace_workbench import __version__
 from aerospace_workbench.evidence.analysis import (
     _metrics,
     run_credibility_analysis,
@@ -122,6 +123,7 @@ class CredibilityAnalysisTests(unittest.TestCase):
         self.assertEqual(compact_result.fsw_telemetry, [])
         self.assertEqual(_metrics(compact_result), _metrics(result))
         self.assertEqual(result.manifest["seed"], 4)
+        self.assertEqual(result.manifest["model_version"], __version__)
         self.assertEqual(
             result.manifest["model_configuration"]["propulsion"],
             ["tabulated_curve", "tabulated_curve"],
@@ -178,6 +180,7 @@ class CredibilityAnalysisTests(unittest.TestCase):
             )
             self.assertEqual(summary["samples"], 2)
             self.assertEqual(summary["seed"], 7)
+            self.assertEqual(summary["model_version"], __version__)
             self.assertGreaterEqual(summary["execution"]["workers"], 1)
             self.assertLessEqual(summary["execution"]["workers"], 2)
             self.assertEqual(summary["telemetry_retention"]["failure_runs"], 2)

@@ -15,6 +15,9 @@ from aerospace_workbench.configuration.scenarios import (
     scenario_hash,
 )
 from aerospace_workbench.flight_software.abi import FswOutput
+from aerospace_workbench.flight_software.bridge import (
+    FSW_SENSOR_DIAGNOSTIC_FIELDS,
+)
 from aerospace_workbench.mathematics.frames import (
     EARTH_ROTATION_RAD_S,
     geodetic_to_ecef,
@@ -36,6 +39,71 @@ from aerospace_workbench.simulation.truth_model import Body
 
 
 class TwinTests(unittest.TestCase):
+    def test_core_estimator_attitude_is_continuous_at_separation(self) -> None:
+        scenario = default_scenario()
+        scenario["simulation"].update(
+            {
+                "max_time_s": 9.0,
+                "output_rate_hz": scenario["sensors"]["imu_rate_hz"],
+            }
+        )
+        result = run_simulation(
+            scenario,
+            create_report=False,
+            persist=False,
+        )
+        separation_time = next(
+            event["time_s"]
+            for event in result.events
+            if event["event"] == "stage_separation"
+        )
+        core_row = next(
+            row
+            for row in result.telemetry
+            if row["body"] == "core_stage"
+        )
+        upper_row = next(
+            row
+            for row in result.telemetry
+            if row["body"] == "upper_stage"
+            and row["time_s"] == core_row["time_s"]
+        )
+        integrated_row = max(
+            (
+                row
+                for row in result.telemetry
+                if row["body"] == "integrated_stack"
+            ),
+            key=lambda row: row["time_s"],
+        )
+        core_attitude = np.array(
+            [
+                core_row[f"fsw_estimated_attitude_{axis}"]
+                for axis in "wxyz"
+            ]
+        )
+        upper_attitude = np.array(
+            [
+                upper_row[f"fsw_estimated_attitude_{axis}"]
+                for axis in "wxyz"
+            ]
+        )
+        branch_difference_rad = 2.0 * math.acos(
+            min(1.0, abs(float(np.dot(core_attitude, upper_attitude))))
+        )
+        integrated_attitude = np.array(
+            [
+                integrated_row[f"fsw_estimated_attitude_{axis}"]
+                for axis in "wxyz"
+            ]
+        )
+        core_jump_rad = 2.0 * math.acos(
+            min(1.0, abs(float(np.dot(core_attitude, integrated_attitude))))
+        )
+        self.assertAlmostEqual(core_row["time_s"], separation_time)
+        self.assertLess(branch_difference_rad, 1e-3)
+        self.assertLess(core_jump_rad, 1e-3)
+
     def test_upper_stage_burn_persists_after_ignition_pulse(self) -> None:
         scenario = default_scenario()
         stage = scenario["vehicle"]["stages"][1]
@@ -107,6 +175,8 @@ class TwinTests(unittest.TestCase):
     def test_three_sensor_channels_are_independent_and_faults_hold(self) -> None:
         scenario = default_scenario()
         scenario["sensors"]["magnetometer_rate_hz"] = 100.0
+        scenario["sensors"]["magnetometer_noise"] = 0.0
+        scenario["sensors"]["magnetometer_bias_sigma"] = 0.0
         stage = scenario["vehicle"]["stages"][0]
         launch_position = np.array([6_378_137.0, 0.0, 0.0])
         body = Body(
@@ -141,6 +211,13 @@ class TwinTests(unittest.TestCase):
                 first[0].acceleration_body_m_s2,
                 first[1].acceleration_body_m_s2,
             )
+        )
+        np.testing.assert_allclose(
+            first[0].magnetic_body,
+            np.array([0.28, 0.08, -0.52])
+            / np.linalg.norm([0.28, 0.08, -0.52]),
+            rtol=0.0,
+            atol=1e-15,
         )
         body.sensor_channels[1].next_imu_sample_s = 0.02
         body.last_specific_force_body_m_s2[0] = 15.0
@@ -394,6 +471,13 @@ class TwinTests(unittest.TestCase):
                 row["previous_execution_time_s"] == 0.0
                 for row in deterministic.fsw_telemetry
             )
+        )
+        self.assertTrue(
+            set(FSW_SENSOR_DIAGNOSTIC_FIELDS)
+            <= deterministic.fsw_telemetry[0].keys()
+        )
+        self.assertGreater(
+            deterministic.fsw_telemetry[0]["accelerometer_usable_mask"], 0
         )
         self.assertTrue(
             any(

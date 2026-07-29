@@ -15,6 +15,9 @@ void test_abi_and_struct_sizes() {
     config = default_config();
     config.struct_size = sizeof(FswConfig) - 1;
     REQUIRE(!fsw::internal::valid_config(config));
+    config = default_config();
+    config.max_voter_sample_skew_s = 0.0;
+    REQUIRE(!fsw::internal::valid_config(config));
 
     config = default_config();
     auto input = input_at(0.0);

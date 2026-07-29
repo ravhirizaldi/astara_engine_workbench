@@ -26,6 +26,7 @@ bool valid_config(const FswConfig& config) {
         config.propulsion_status_timeout_s,
         config.discrete_feedback_timeout_s,
         config.platform_status_timeout_s,
+        config.max_voter_sample_skew_s,
         config.acceleration_disagreement_m_s2,
         config.gyro_disagreement_rad_s,
         config.barometer_disagreement_m,
@@ -96,6 +97,7 @@ bool valid_config(const FswConfig& config) {
         || config.propulsion_status_timeout_s <= 0.0
         || config.discrete_feedback_timeout_s <= 0.0
         || config.platform_status_timeout_s <= 0.0
+        || config.max_voter_sample_skew_s <= 0.0
         || config.acceleration_disagreement_m_s2 <= 0.0
         || config.gyro_disagreement_rad_s <= 0.0
         || config.barometer_disagreement_m <= 0.0

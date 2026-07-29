@@ -389,17 +389,7 @@ class EngineeringWorkbench:
         self.scenario_text.delete("1.0", "end")
         self.scenario_text.insert("1.0", json.dumps(scenario_document, indent=2))
         self.vehicle_text.delete("1.0", "end")
-        if vehicle_document is None:
-            vehicle_document = {
-                "schema_version": "inline-legacy",
-                **{
-                    key: scenario[key]
-                    for key in ("vehicle", "sensors", "actuators")
-                },
-            }
-            self.vehicle_path_var.set("Inline legacy vehicle definition")
-        else:
-            self.vehicle_path_var.set(str(vehicle_path))
+        self.vehicle_path_var.set(str(vehicle_path))
         self.vehicle_text.insert("1.0", json.dumps(vehicle_document, indent=2))
         self.seed_var.set(int(scenario["simulation"].get("seed", 1)))
         self.status_var.set("Scenario and vehicle definition valid")

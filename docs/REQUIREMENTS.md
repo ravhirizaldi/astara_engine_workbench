@@ -26,7 +26,7 @@ hardware or authorize flight.
 | AST-FSW-017 | Stage and recovery delays shall be relative to confirmed mission events, and separation/drogue/main requests shall carry one-shot sequence identities while confirmation remains pending. | `flight_core/tests/unit/test_mission.cpp` |
 | AST-FSW-018 | Air-data, propulsion, discrete-feedback, and platform freshness shall use subsystem-specific timeouts; a configured input step-time mismatch shall raise `FSW_FAULT_INPUT_TIMING`. | `flight_core/tests/unit/test_faults.cpp` |
 | AST-EVT-001 | Launch, burnout, apogee, and landing evidence shall persist across multiple samples before transition. | `flight_core/tests/unit/test_mission.cpp` |
-| AST-RPL-001 | Recorded multi-channel `sensors.csv.gz` and `commands.csv` shall replay deterministically through the same C++ flight core; legacy single-channel runs shall remain readable. | `tests.test_replay` |
+| AST-RPL-001 | Recorded multi-channel `sensors.csv.gz` and `commands.csv` using the current schema shall replay deterministically through the same C++ flight core. | `tests.test_replay` |
 | AST-ANL-001 | Monte Carlo samples shall preserve seeded results when executed serially or in independent worker processes, with automatic execution reserving 25 percent of available logical CPUs. | `tests.test_analysis` |
 | AST-ANL-002 | Credibility analysis shall persist full telemetry for every failed sample and a deterministic configured percentage of successful samples while retaining compact results for every sample. | `tests.test_analysis` |
 | AST-DAT-001 | Each persisted run shall record scenario, vehicle, seed, source hash, and artifact hashes. | `tests.test_twin` |

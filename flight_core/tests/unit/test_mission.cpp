@@ -83,6 +83,27 @@ void test_delayed_launch_event_timing_and_one_shot_separation() {
     fsw_destroy(handle);
 }
 
+void test_standalone_upper_accepts_separation_feedback() {
+    auto config = default_config();
+    config.body_role = FSW_BODY_UPPER;
+    FswHandle handle = fsw_create(&config);
+    REQUIRE(handle != nullptr);
+
+    FswOutput output{};
+    int stage2_pulses = 0;
+    for (int tick = 0; tick < 40 && output.mode != FSW_MODE_BOOST_2; ++tick) {
+        auto input = input_at(tick * 0.01, 20.0);
+        input.discretes.stage_separated.asserted = 1;
+        input.propulsion.running = stage2_pulses > 0;
+        step(handle, input, output);
+        stage2_pulses += output.stage2_ignite ? 1 : 0;
+    }
+
+    REQUIRE(output.mode == FSW_MODE_BOOST_2);
+    REQUIRE(stage2_pulses == 1);
+    fsw_destroy(handle);
+}
+
 void test_drogue_main_and_landing() {
     auto config = default_config();
     fsw::internal::Context context(config);
@@ -163,9 +184,39 @@ void test_manual_and_automatic_abort() {
     REQUIRE(context.mission.mode == FSW_MODE_ABORT);
 }
 
+void test_accelerometer_loss_cannot_trigger_burnout() {
+    const auto config = default_config();
+    fsw::internal::Context context(config);
+    fsw::internal::VotedSensors voted{};
+    voted.accelerometer_valid = false;
+    voted.gyroscope_valid = true;
+    voted.imu_valid = false;
+    context.mission.mode = FSW_MODE_BOOST_1;
+    context.mission.ignition_confirmed_s = 0.0;
+    context.navigation.attitude_valid = true;
+    context.timing.step_delta_s = 0.01;
+
+    FswInput input{};
+    for (int tick = 0; tick < 4; ++tick) {
+        input = input_at(1.0 + tick * 0.01);
+        input.propulsion.running = 1;
+        fsw::internal::update_mode(context, input, voted);
+        REQUIRE(context.mission.mode == FSW_MODE_BOOST_1);
+        REQUIRE(context.mission.burnout_detected_s < 0.0);
+    }
+
+    input = input_at(1.04);
+    input.propulsion.running = 1;
+    fsw::internal::update_mode(context, input, voted);
+    REQUIRE(context.mission.mode == FSW_MODE_ABORT);
+    REQUIRE(context.mission.burnout_detected_s < 0.0);
+}
+
 int main() {
     test_delayed_launch_event_timing_and_one_shot_separation();
+    test_standalone_upper_accepts_separation_feedback();
     test_drogue_main_and_landing();
     test_manual_and_automatic_abort();
+    test_accelerometer_loss_cannot_trigger_burnout();
     return EXIT_SUCCESS;
 }

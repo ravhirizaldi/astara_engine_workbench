@@ -44,6 +44,7 @@ from ..flight_software.abi import (
 from ..flight_software.bridge import (
     SENSOR_CSV_FIELDS,
     FlightCore,
+    fsw_sensor_diagnostics_to_row,
     sensor_frame_to_row,
 )
 from ..flight_software.timing import (
@@ -117,7 +118,9 @@ def _channel_state(
                     float(sensors["gyro_noise_rad_s"]) * 0.1,
                     3,
                 ),
-                rng.normal(0.0, 0.002, 3),
+                rng.normal(
+                    0.0, float(sensors["magnetometer_bias_sigma"]), 3
+                ),
                 float(
                     rng.normal(
                         0.0,
@@ -191,7 +194,7 @@ def _sensor_frame(
                 quat_conjugate(body.attitude_wxyz), magnetic_ecef
             )
             + state.magnetometer_bias
-            + rng.normal(0.0, 0.002, 3)
+            + rng.normal(0.0, float(sensors["magnetometer_noise"]), 3)
         )
         state.magnetometer_sample_time_s = time_s
         state.next_magnetometer_sample_s = (
@@ -367,7 +370,9 @@ def _run_fsw_substeps(
     ] | None = None,
     timing_mode: str = "deterministic",
     injected_execution_time_s: float | None = None,
-) -> FswOutput:
+    shadow_core: FlightCore | None = None,
+    shadow_output: FswOutput | None = None,
+) -> tuple[FswOutput, FswOutput | None]:
     fsw_step_s = 1.0 / float(scenario["sensors"]["imu_rate_hz"])
     timing_override_s = (
         None
@@ -407,10 +412,29 @@ def _run_fsw_substeps(
             deadline_missed=False if timing_mode == "deterministic" else None,
             sensor_channels=frames[1:],
         )
+        if shadow_core is not None:
+            shadow_frames = frames
+            if output.stage_separate:
+                shadow_frames = [
+                    SensorFrame.from_buffer_copy(item) for item in frames
+                ]
+                for item in shadow_frames:
+                    item.stage_separated = 1
+            shadow_output = shadow_core.step(
+                shadow_frames[0],
+                propulsion_running=propulsion_running,
+                drogue_deployed=body.drogue_deployed,
+                main_deployed=body.main_deployed,
+                previous_execution_time_s=timing_override_s,
+                deadline_missed=(
+                    False if timing_mode == "deterministic" else None
+                ),
+                sensor_channels=shadow_frames[1:],
+            )
         if on_sensor:
             on_sensor(body.name, frames, output)
         body.next_fsw_sample_s += fsw_step_s
-    return output
+    return output, shadow_output
 
 
 def _forces(
@@ -791,6 +815,10 @@ def run_simulation(
     cores: dict[str, FlightCore] = {
         "integrated_stack": FlightCore(scenario, FSW_BODY_INTEGRATED)
     }
+    dormant_core: FlightCore | None = FlightCore(
+        scenario, FSW_BODY_CORE, auto_commands=False
+    )
+    dormant_output: FswOutput | None = FswOutput()
     outputs: dict[str, FswOutput] = {"integrated_stack": FswOutput()}
     telemetry: list[dict[str, Any]] = []
     fsw_rows: list[dict[str, Any]] = []
@@ -879,7 +907,7 @@ def run_simulation(
                 )
                 break
             for body in list(bodies):
-                output = _run_fsw_substeps(
+                output, shadow_output = _run_fsw_substeps(
                     cores[body.name],
                     body,
                     scenario,
@@ -891,8 +919,12 @@ def run_simulation(
                     record_sensor,
                     timing_mode,
                     injected_execution_time_s,
+                    dormant_core if body.name == "integrated_stack" else None,
+                    dormant_output,
                 )
                 outputs[body.name] = output
+                if body.name == "integrated_stack":
+                    dormant_output = shadow_output
                 previous_mode = previous_modes.get(body.name)
                 if previous_mode != output.mode:
                     events.extend(
@@ -916,11 +948,15 @@ def run_simulation(
                 core_stage, upper_stage = _split_stack(integrated_stack, scenario)
                 integrated_core = cores.pop("integrated_stack")
                 integrated_output = outputs.pop("integrated_stack")
+                assert dormant_core is not None
+                assert dormant_output is not None
                 bodies = [core_stage, upper_stage]
-                cores["core_stage"] = FlightCore(scenario, FSW_BODY_CORE)
+                cores["core_stage"] = dormant_core
                 cores["upper_stage"] = integrated_core
-                outputs["core_stage"] = FswOutput()
+                outputs["core_stage"] = dormant_output
                 outputs["upper_stage"] = integrated_output
+                dormant_core = None
+                dormant_output = None
                 previous_modes.pop("integrated_stack", None)
                 previous_modes["upper_stage"] = integrated_output.mode
                 separated = True
@@ -932,21 +968,10 @@ def run_simulation(
                         "core stage and upper stage created",
                     )
                 )
-                core_stage.next_fsw_sample_s = time_s
-                upper_stage.next_fsw_sample_s = integrated_stack.next_fsw_sample_s
-                outputs["core_stage"] = _run_fsw_substeps(
-                    cores["core_stage"],
-                    core_stage,
-                    scenario,
-                    rng,
-                    time_s,
-                    launch_position,
-                    True,
-                    outputs["core_stage"],
-                    record_sensor,
-                    timing_mode,
-                    injected_execution_time_s,
+                core_stage.next_fsw_sample_s = (
+                    integrated_stack.next_fsw_sample_s
                 )
+                upper_stage.next_fsw_sample_s = integrated_stack.next_fsw_sample_s
 
             current_values: dict[str, tuple[float, float, float]] = {}
             for body in bodies:
@@ -1053,6 +1078,7 @@ def run_simulation(
                         "navigation_status": NAVIGATION_STATUS_NAMES[
                             output.navigation_status
                         ],
+                        **fsw_sensor_diagnostics_to_row(output),
                         "fault_flags": int(
                             output.active_fault_flags
                             | output.latched_fault_flags
@@ -1156,6 +1182,8 @@ def run_simulation(
     finally:
         for core in cores.values():
             core.close()
+        if dormant_core is not None:
+            dormant_core.close()
         if sensor_file is not None:
             sensor_file.close()
         if command_file is not None:

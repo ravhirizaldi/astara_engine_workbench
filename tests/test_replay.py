@@ -2,22 +2,19 @@ import csv
 import gzip
 import tempfile
 import unittest
-import warnings
 from pathlib import Path
 
-from aerospace_workbench.configuration.schemas import (
-    SENSOR_STREAM_SCHEMA_VERSION,
-    SchemaMigrationWarning,
-)
 from aerospace_workbench.flight_software.abi import (
     SensorFrame,
 )
 from aerospace_workbench.flight_software.bridge import (
+    FSW_SENSOR_DIAGNOSTIC_FIELDS,
     SENSOR_CSV_FIELDS,
     sensor_frame_from_row,
     sensor_frame_to_row,
 )
 from aerospace_workbench.configuration.scenarios import default_scenario
+from aerospace_workbench.replay.reader import validated_sensor_rows
 from aerospace_workbench.replay.runner import replay_fsw
 
 
@@ -30,12 +27,7 @@ class ReplayTests(unittest.TestCase):
             with gzip.open(
                 sensor_path, "wt", newline="", encoding="utf-8"
             ) as file:
-                legacy_fields = tuple(
-                    field
-                    for field in SENSOR_CSV_FIELDS
-                    if field != "schema_version"
-                )
-                writer = csv.DictWriter(file, fieldnames=legacy_fields)
+                writer = csv.DictWriter(file, fieldnames=SENSOR_CSV_FIELDS)
                 writer.writeheader()
                 for index in range(40):
                     frame = SensorFrame(
@@ -66,7 +58,6 @@ class ReplayTests(unittest.TestCase):
                         1,
                     )
                     row = sensor_frame_to_row("integrated_stack", frame)
-                    row.pop("schema_version")
                     writer.writerow(row)
             with (Path(directory) / "commands.csv").open(
                 "w", newline="", encoding="utf-8"
@@ -91,14 +82,12 @@ class ReplayTests(unittest.TestCase):
                     }
                 )
 
-            with self.assertWarns(SchemaMigrationWarning):
-                first = replay_fsw(
-                    scenario, sensor_path, Path(directory) / "first.csv"
-                )
-            with self.assertWarns(SchemaMigrationWarning):
-                second = replay_fsw(
-                    scenario, sensor_path, Path(directory) / "second.csv"
-                )
+            first = replay_fsw(
+                scenario, sensor_path, Path(directory) / "first.csv"
+            )
+            second = replay_fsw(
+                scenario, sensor_path, Path(directory) / "second.csv"
+            )
 
             self.assertEqual(first.read_bytes(), second.read_bytes())
             with first.open(newline="", encoding="utf-8") as file:
@@ -106,8 +95,14 @@ class ReplayTests(unittest.TestCase):
             self.assertEqual(len(rows), 40)
             self.assertEqual(rows[-1]["mode"], "BOOST_1")
             self.assertEqual(rows[-1]["command_source"], "recorded")
+            self.assertTrue(
+                set(FSW_SENSOR_DIAGNOSTIC_FIELDS) <= rows[-1].keys()
+            )
+            self.assertGreater(
+                int(rows[-1]["accelerometer_usable_mask"]), 0
+            )
 
-    def test_old_sensor_rows_default_sample_times_to_frame_time(self) -> None:
+    def test_sensor_rows_require_current_schema_and_fields(self) -> None:
         vector = SensorFrame._fields_[2][1]
         frame = SensorFrame(
             1.5,
@@ -128,28 +123,15 @@ class ReplayTests(unittest.TestCase):
             1.4,
         )
         row = sensor_frame_to_row("integrated_stack", frame)
-        self.assertEqual(
-            row["schema_version"], SENSOR_STREAM_SCHEMA_VERSION
-        )
-        for field in (
-            "schema_version",
-            "barometer_sample_time_s",
-            "gnss_sample_time_s",
-            "imu_sample_time_s",
-            "magnetometer_sample_time_s",
-            "accel_valid",
-            "gyro_valid",
-            "magnetometer_valid",
-        ):
-            row.pop(field)
-        restored = sensor_frame_from_row(row)
-        self.assertEqual(restored.barometer_sample_time_s, 1.5)
-        self.assertEqual(restored.gnss_sample_time_s, 1.5)
-        self.assertEqual(restored.imu_sample_time_s, 1.5)
-        self.assertEqual(restored.magnetometer_sample_time_s, 1.5)
-        self.assertEqual(restored.accel_valid, 1)
-        self.assertEqual(restored.gyro_valid, 1)
-        self.assertEqual(restored.magnetometer_valid, 1)
+        missing_schema = dict(row)
+        missing_schema.pop("schema_version")
+        with self.assertRaisesRegex(ValueError, "schema_version"):
+            list(validated_sensor_rows([missing_schema], Path("sensors.csv")))
+
+        missing_field = dict(row)
+        missing_field.pop("imu_sample_time_s")
+        with self.assertRaises(KeyError):
+            sensor_frame_from_row(missing_field)
 
 
 if __name__ == "__main__":

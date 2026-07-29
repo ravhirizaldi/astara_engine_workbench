@@ -227,17 +227,10 @@ def _sample_scenario(
             sampled["environment"]["wind_ned_m_s"], wind_offsets, strict=True
         )
     ]
-    if "events" in sampled["mission"]:
-        for event in sampled["mission"]["events"]:
-            event["delay"] = max(
-                0.0, float(event["delay"]) + factors["timing_offset_s"]
-            )
-    else:
-        for name in ("separation_delay_s", "stage2_ignition_delay_s"):
-            sampled["mission"][name] = max(
-                1e-6,
-                float(sampled["mission"][name]) + factors["timing_offset_s"],
-            )
+    for event in sampled["mission"]["events"]:
+        event["delay"] = max(
+            0.0, float(event["delay"]) + factors["timing_offset_s"]
+        )
     validate_scenario(sampled)
     return sampled, factors
 

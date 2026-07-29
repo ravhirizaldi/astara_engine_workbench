@@ -123,14 +123,41 @@ void test_channel_recovery_staleness_and_asynchronous_samples() {
     fsw::internal::Context asynchronous_context(config);
     auto suite = input_at(0.20).sensors;
     suite.imu_count = 2;
+    suite.magnetometer_count = 2;
+    suite.barometer_count = 2;
+    suite.gnss_count = 2;
     suite.imus[1] = suite.imus[0];
+    suite.magnetometers[1] = suite.magnetometers[0];
+    suite.barometers[1] = suite.barometers[0];
+    suite.gnss[1] = suite.gnss[0];
     suite.imus[0].sample_time_s = 0.11;
     suite.imus[1].sample_time_s = 0.19;
+    suite.magnetometers[0].sample_time_s = 0.11;
+    suite.magnetometers[1].sample_time_s = 0.19;
+    suite.barometers[0].sample_time_s = 0.11;
+    suite.barometers[1].sample_time_s = 0.19;
+    suite.gnss[0].sample_time_s = 0.11;
+    suite.gnss[1].sample_time_s = 0.19;
+    suite.imus[0].acceleration_body_m_s2[0] = 1.0;
+    suite.imus[1].acceleration_body_m_s2[0] = 9.0;
+    suite.imus[0].gyro_body_rad_s[0] = 0.1;
+    suite.imus[1].gyro_body_rad_s[0] = 0.2;
     voted = fsw::internal::vote_sensors(asynchronous_context, suite);
-    REQUIRE(voted.accelerometer_usable_mask == 0b011u);
-    REQUIRE(voted.gyroscope_usable_mask == 0b011u);
+    REQUIRE(voted.accelerometer_usable_mask == 0b010u);
+    REQUIRE(voted.gyroscope_usable_mask == 0b010u);
+    REQUIRE(voted.magnetometer_usable_mask == 0b010u);
+    REQUIRE(voted.barometer_usable_mask == 0b010u);
+    REQUIRE(voted.gnss_usable_mask == 0b010u);
+    REQUIRE(std::abs(voted.acceleration[0] - 9.0) < 1e-12);
+    REQUIRE(std::abs(voted.gyro[0] - 0.2) < 1e-12);
     REQUIRE(std::abs(voted.accelerometer_sample_time_s - 0.19) < 1e-12);
     REQUIRE(std::abs(voted.gyroscope_sample_time_s - 0.19) < 1e-12);
+    REQUIRE(
+        (
+            asynchronous_context.sensors.accelerometer_health[0].flags
+            & FSW_SENSOR_HEALTH_DISAGREEMENT
+        ) == 0
+    );
     REQUIRE(
         std::abs(
             asynchronous_context.sensors.accelerometer_health[0].age_s

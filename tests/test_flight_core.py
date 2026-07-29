@@ -2,6 +2,7 @@ import ctypes
 import unittest
 from unittest import mock
 
+from aerospace_workbench import __version__
 from aerospace_workbench.flight_software.abi import (
     FSW_BODY_CORE,
     FSW_BODY_INTEGRATED,
@@ -11,6 +12,7 @@ from aerospace_workbench.flight_software.abi import (
     FswOutput,
     SensorFrame,
 )
+from aerospace_workbench.flight_software.build import build_library
 from aerospace_workbench.flight_software.bridge import (
     FlightCore,
     recovery_stage_index,
@@ -20,6 +22,15 @@ from aerospace_workbench.configuration.scenarios import default_scenario
 
 
 class FlightCoreTests(unittest.TestCase):
+    def test_python_and_native_versions_match(self) -> None:
+        library = ctypes.CDLL(str(build_library()))
+        library.fsw_version.argtypes = []
+        library.fsw_version.restype = ctypes.c_char_p
+        self.assertEqual(
+            library.fsw_version().decode(),
+            f"fsw-core-{__version__}",
+        )
+
     def test_body_role_maps_to_surviving_recovery_stage(self) -> None:
         self.assertEqual(recovery_stage_index(FSW_BODY_INTEGRATED), 1)
         self.assertEqual(recovery_stage_index(FSW_BODY_CORE), 0)

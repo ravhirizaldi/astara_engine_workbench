@@ -157,15 +157,28 @@ void vote_gnss(
         }
     }
 
+    const uint32_t aligned_healthy_mask = freshest_aligned_mask(
+        suite.gnss,
+        suite.gnss_count,
+        healthy_mask,
+        context.config.max_voter_sample_skew_s
+    );
+    const uint32_t aligned_fresh_mask = aligned_to_freshest_mask(
+        suite.gnss,
+        suite.gnss_count,
+        fresh_mask,
+        aligned_healthy_mask,
+        context.config.max_voter_sample_skew_s
+    );
     uint32_t consensus_mask = 0;
-    const uint32_t healthy_count = bit_count(healthy_mask);
-    if (healthy_count == 1) {
-        consensus_mask = healthy_mask;
-    } else if (healthy_count == 2) {
+    const uint32_t aligned_count = bit_count(aligned_healthy_mask);
+    if (aligned_count == 1) {
+        consensus_mask = aligned_healthy_mask;
+    } else if (aligned_count == 2) {
         int indices[2]{};
         int found = 0;
         for (uint32_t index = 0; index < suite.gnss_count; ++index) {
-            if (healthy_mask & (1u << index)) {
+            if (aligned_healthy_mask & (1u << index)) {
                 indices[found++] = static_cast<int>(index);
             }
         }
@@ -175,9 +188,9 @@ void vote_gnss(
             context.config,
             voted.disagreement_flags
         )) {
-            consensus_mask = healthy_mask;
+            consensus_mask = aligned_healthy_mask;
         }
-    } else if (healthy_count == 3) {
+    } else if (aligned_count == 3) {
         double position_median[3]{};
         double velocity_median[3]{};
         for (int axis = 0; axis < 3; ++axis) {
@@ -232,6 +245,9 @@ void vote_gnss(
         if (!new_sample(health, suite.gnss[index].sample_time_s)) {
             continue;
         }
+        if ((aligned_fresh_mask & (1u << index)) == 0) {
+            continue;
+        }
         bool agrees = (consensus_mask & (1u << index)) != 0;
         if (!agrees) {
             health.flags |= FSW_SENSOR_HEALTH_DISAGREEMENT;
@@ -255,7 +271,7 @@ void vote_gnss(
         observe_channel(
             health,
             agrees,
-            healthy_count >= 3,
+            aligned_count >= 3,
             context.config
         );
         if (health.rejected) {

@@ -126,15 +126,28 @@ ImuComponentVote vote_imu_component(
         }
     }
 
+    const uint32_t aligned_healthy_mask = freshest_aligned_mask(
+        suite.imus,
+        suite.imu_count,
+        healthy_mask,
+        context.config.max_voter_sample_skew_s
+    );
+    const uint32_t aligned_fresh_mask = aligned_to_freshest_mask(
+        suite.imus,
+        suite.imu_count,
+        fresh_mask,
+        aligned_healthy_mask,
+        context.config.max_voter_sample_skew_s
+    );
     uint32_t consensus_mask = 0;
-    const uint32_t healthy_count = bit_count(healthy_mask);
-    if (healthy_count == 1) {
-        consensus_mask = healthy_mask;
-    } else if (healthy_count == 2) {
+    const uint32_t aligned_count = bit_count(aligned_healthy_mask);
+    if (aligned_count == 1) {
+        consensus_mask = aligned_healthy_mask;
+    } else if (aligned_count == 2) {
         int indices[2]{};
         int found = 0;
         for (uint32_t index = 0; index < suite.imu_count; ++index) {
-            if (healthy_mask & (1u << index)) {
+            if (aligned_healthy_mask & (1u << index)) {
                 indices[found++] = static_cast<int>(index);
             }
         }
@@ -144,11 +157,11 @@ ImuComponentVote vote_imu_component(
             disagreement_threshold,
             accelerometer
         )) {
-            consensus_mask = healthy_mask;
+            consensus_mask = aligned_healthy_mask;
         } else {
             disagreement_flags |= disagreement_flag;
         }
-    } else if (healthy_count == 3) {
+    } else if (aligned_count == 3) {
         double median[3]{};
         for (int axis = 0; axis < 3; ++axis) {
             median[axis] = median3(
@@ -187,6 +200,9 @@ ImuComponentVote vote_imu_component(
         if (!new_sample(channel, suite.imus[index].sample_time_s)) {
             continue;
         }
+        if ((aligned_fresh_mask & (1u << index)) == 0) {
+            continue;
+        }
         bool agrees = (consensus_mask & (1u << index)) != 0;
         if (!agrees) {
             channel.flags |= FSW_SENSOR_HEALTH_DISAGREEMENT;
@@ -210,7 +226,7 @@ ImuComponentVote vote_imu_component(
         observe_channel(
             channel,
             agrees,
-            healthy_count >= 3,
+            aligned_count >= 3,
             context.config
         );
         if (channel.rejected) {

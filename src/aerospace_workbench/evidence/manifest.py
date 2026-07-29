@@ -8,7 +8,7 @@ from typing import Any, Iterable
 
 from ..configuration.schemas import (
     RUN_SCHEMA_VERSION,
-    normalize_schema_document,
+    require_schema_version,
 )
 from .artifacts import artifact_hashes, write_json
 
@@ -24,8 +24,8 @@ def write_manifest(root: Path, manifest: dict[str, Any]) -> None:
 
 
 def read_manifest(path: str | Path) -> dict[str, Any]:
-    """Read a run manifest and normalize a recognized legacy identifier."""
+    """Read a run manifest with the required schema."""
     source = Path(path)
     manifest = json.loads(source.read_text(encoding="utf-8"))
-    normalize_schema_document(manifest, RUN_SCHEMA_VERSION, source)
+    require_schema_version(manifest, RUN_SCHEMA_VERSION, source)
     return manifest

@@ -239,6 +239,8 @@
     "velocity_filter_tau_s": 0.6,
     "accelerometer_noise_m_s2": 0.08,
     "gyro_noise_rad_s": 0.0015,
+    "magnetometer_noise": 0.002,
+    "magnetometer_bias_sigma": 0.002,
     "barometer_noise_m": 1.5,
     "gnss_position_noise_m": 2.5,
     "gnss_velocity_noise_m_s": 0.15,

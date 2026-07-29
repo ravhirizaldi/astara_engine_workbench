@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aerospace-workbench"
-version = "0.1.0"
+dynamic = ["version"]
 description = "ASTARA Engineering Workbench simulation and SIL tools"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -20,3 +20,6 @@ aerospace-workbench = "aerospace_workbench.application.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.dynamic]
+version = {attr = "aerospace_workbench.__version__"}

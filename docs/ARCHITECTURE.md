@@ -82,7 +82,10 @@ yet the roadmap's independent-process SIL target.
 
 Guidance points are copied into a fixed 32-point configuration table during
 initialization. The upper stage inherits the integrated-stack Flight Core
-instance at separation, preserving attitude, navigation, and mission state.
+instance at separation when available, preserving attitude, navigation, and
+mission state. A standalone upper controller is also valid: it starts in
+INTERSTAGE, needs no state handoff, and uses fresh asserted separation feedback
+as its local separation-confirmation epoch.
 SAFE requires explicit ARM and LAUNCH commands. Stage-one ignition is a
 one-step request confirmed by propulsion feedback. Stage-two ignition remains
 automatic but is guarded by separation feedback, navigation, attitude,

@@ -8,7 +8,7 @@ from typing import Any
 from .schemas import (
     SCENARIO_SCHEMA_VERSION,
     VEHICLE_KEYS,
-    normalize_schema_document,
+    require_schema_version,
 )
 from .scenarios import resolve_mission_events
 
@@ -113,16 +113,24 @@ def _validate_engines(stage: dict[str, Any], prefix: str) -> float:
 
 def validate_scenario(scenario: dict[str, Any]) -> None:
     _reject_nonfinite_numbers(scenario)
-    normalize_schema_document(scenario, SCENARIO_SCHEMA_VERSION)
-    if not isinstance(scenario.get("vehicle_definition"), str) and not all(
-        key in scenario for key in VEHICLE_KEYS
-    ):
-        raise ValueError(
-            "vehicle_definition or inline vehicle data is required"
-        )
+    require_schema_version(scenario, SCENARIO_SCHEMA_VERSION)
+    if not isinstance(scenario.get("vehicle_definition"), str):
+        raise ValueError("vehicle_definition is required")
+    if not all(key in scenario for key in VEHICLE_KEYS):
+        raise ValueError("resolved vehicle data is required")
 
     simulation = scenario.get("simulation", {})
-    _positive(simulation, ("time_step_s", "max_time_s"), "simulation")
+    _positive(
+        simulation,
+        ("time_step_s", "max_time_s", "output_rate_hz"),
+        "simulation",
+    )
+    maximum_output_rate_hz = 1.0 / float(simulation["time_step_s"])
+    if float(simulation["output_rate_hz"]) > maximum_output_rate_hz:
+        raise ValueError(
+            "simulation.output_rate_hz must be no greater than "
+            f"1 / simulation.time_step_s ({maximum_output_rate_hz:g} Hz)"
+        )
     if not isinstance(simulation.get("seed", 1), int) or simulation.get("seed", 1) < 0:
         raise ValueError("simulation.seed must be a nonnegative integer")
     monte_carlo = scenario.get("monte_carlo", {"samples": 20, "seed": 1})
@@ -153,6 +161,18 @@ def validate_scenario(scenario: dict[str, Any]) -> None:
         raise ValueError("environment.latitude_deg must be between -90 and 90")
     if not isinstance(longitude, (int, float)) or not -180 <= longitude <= 180:
         raise ValueError("environment.longitude_deg must be between -180 and 180")
+    wind = environment.get("wind_ned_m_s")
+    if (
+        not isinstance(wind, list)
+        or len(wind) != 3
+        or any(
+            not isinstance(value, (int, float)) or isinstance(value, bool)
+            for value in wind
+        )
+    ):
+        raise ValueError(
+            "environment.wind_ned_m_s requires three finite numeric values"
+        )
 
     stages = scenario.get("vehicle", {}).get("stages")
     if not isinstance(stages, list) or len(stages) != 2:
@@ -289,14 +309,7 @@ def validate_scenario(scenario: dict[str, Any]) -> None:
         )
 
     mission = scenario.get("mission", {})
-    if "events" in mission:
-        resolve_mission_events(scenario)
-    else:
-        _positive(
-            mission,
-            ("separation_delay_s", "stage2_ignition_delay_s"),
-            "mission",
-        )
+    resolve_mission_events(scenario)
     schedule = mission.get("attitude_schedule")
     if not isinstance(schedule, list) or not 2 <= len(schedule) <= 32:
         raise ValueError("mission.attitude_schedule requires 2 to 32 points")
@@ -343,7 +356,13 @@ def validate_scenario(scenario: dict[str, Any]) -> None:
     actuators = scenario.get("actuators", {})
     _positive(
         actuators,
-        ("max_tvc_deg", "max_fin_deg", "max_rate_deg_s"),
+        (
+            "max_tvc_deg",
+            "max_fin_deg",
+            "max_rate_deg_s",
+            "tvc_kp",
+            "tvc_kd",
+        ),
         "actuators",
     )
 
@@ -374,6 +393,7 @@ def validate_scenario(scenario: dict[str, Any]) -> None:
         "propulsion_status_timeout_s",
         "discrete_feedback_timeout_s",
         "platform_status_timeout_s",
+        "max_voter_sample_skew_s",
         "step_time_tolerance_s",
         "altitude_filter_tau_s",
         "velocity_filter_tau_s",
@@ -383,6 +403,8 @@ def validate_scenario(scenario: dict[str, Any]) -> None:
     for name in (
         "accelerometer_noise_m_s2",
         "gyro_noise_rad_s",
+        "magnetometer_noise",
+        "magnetometer_bias_sigma",
         "barometer_noise_m",
         "gnss_position_noise_m",
         "gnss_velocity_noise_m_s",

@@ -1,30 +1,18 @@
 import copy
-import json
-import tempfile
 import unittest
-import warnings
-from pathlib import Path
 
 from aerospace_workbench.configuration.scenarios import (
     default_scenario_path,
     default_scenario,
     load_scenario_documents,
-    load_scenario,
-    resolve_scenario_path,
     resolve_mission_events,
     scenario_hash,
 )
 from aerospace_workbench.configuration.schemas import (
-    LEGACY_SCENARIO_SCHEMA_VERSION as LEGACY_SCHEMA_VERSION,
     SCENARIO_SCHEMA_VERSION as SCHEMA_VERSION,
-    VEHICLE_SCHEMA_VERSION,
-    SchemaMigrationWarning,
 )
 from aerospace_workbench.configuration.validation import validate_scenario
 from aerospace_workbench.configuration.vehicles import evidence_documents
-from aerospace_workbench.evidence.artifacts import (
-    write_configuration_artifacts,
-)
 
 
 class ScenarioTests(unittest.TestCase):
@@ -71,98 +59,9 @@ class ScenarioTests(unittest.TestCase):
             scenario_hash(resolved), scenario_hash(metadata_changed)
         )
 
-    def test_default_and_legacy_repository_paths_resolve_to_configs(self) -> None:
+    def test_default_repository_path_resolves_to_configs(self) -> None:
         self.assertEqual(default_scenario_path().parent.name, "scenarios")
         self.assertEqual(default_scenario_path().parent.parent.name, "configs")
-        with self.assertWarns(SchemaMigrationWarning):
-            resolved = resolve_scenario_path(
-                "scenarios/anthariksa_reference_mission.json"
-            )
-        self.assertEqual(resolved, default_scenario_path())
-
-    def test_legacy_files_warn_normalize_and_preserve_source(self) -> None:
-        canonical_scenario = json.loads(
-            default_scenario_path().read_text(encoding="utf-8")
-        )
-        canonical_vehicle_path = (
-            default_scenario_path().parent
-            / canonical_scenario["vehicle_definition"]
-        ).resolve()
-        canonical_vehicle = json.loads(
-            canonical_vehicle_path.read_text(encoding="utf-8")
-        )
-        canonical_scenario["schema_version"] = "c1.scenario.v1"
-        canonical_vehicle["schema_version"] = "astara.vehicle.v1"
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            scenario_dir = root / "scenarios"
-            vehicle_dir = root / "vehicles"
-            scenario_dir.mkdir()
-            vehicle_dir.mkdir()
-            scenario_path = scenario_dir / "legacy.json"
-            vehicle_path = vehicle_dir / "legacy_vehicle.json"
-            canonical_scenario["vehicle_definition"] = (
-                "../vehicles/legacy_vehicle.json"
-            )
-            scenario_path.write_text(
-                json.dumps(canonical_scenario, indent=4) + "\n",
-                encoding="utf-8",
-            )
-            vehicle_path.write_text(
-                json.dumps(canonical_vehicle, separators=(",", ":")),
-                encoding="utf-8",
-            )
-            source_scenario = scenario_path.read_bytes()
-            source_vehicle = vehicle_path.read_bytes()
-
-            with warnings.catch_warnings(record=True) as caught:
-                warnings.simplefilter("always")
-                scenario = load_scenario(scenario_path)
-            self.assertEqual(len(caught), 2)
-            self.assertTrue(
-                all(
-                    issubclass(warning.category, SchemaMigrationWarning)
-                    for warning in caught
-                )
-            )
-            self.assertEqual(scenario["schema_version"], SCHEMA_VERSION)
-
-            evidence_dir = root / "evidence"
-            evidence_dir.mkdir()
-            paths = write_configuration_artifacts(evidence_dir, scenario)
-            self.assertEqual(
-                (evidence_dir / "source_scenario.json").read_bytes(),
-                source_scenario,
-            )
-            self.assertEqual(
-                (
-                    evidence_dir / "source_vehicle_definition.json"
-                ).read_bytes(),
-                source_vehicle,
-            )
-            self.assertEqual(
-                json.loads(
-                    (evidence_dir / "scenario.json").read_text(
-                        encoding="utf-8"
-                    )
-                )["schema_version"],
-                SCHEMA_VERSION,
-            )
-            self.assertEqual(
-                json.loads(
-                    (evidence_dir / "vehicle_definition.json").read_text(
-                        encoding="utf-8"
-                    )
-                )["schema_version"],
-                VEHICLE_SCHEMA_VERSION,
-            )
-            self.assertEqual({path.name for path in paths}, {
-                "scenario.json",
-                "vehicle_definition.json",
-                "source_scenario.json",
-                "source_vehicle_definition.json",
-            })
 
     def test_unknown_schema_is_rejected(self) -> None:
         scenario = default_scenario()
@@ -175,6 +74,27 @@ class ScenarioTests(unittest.TestCase):
         scenario["simulation"]["time_step_s"] = 0.0
         with self.assertRaisesRegex(ValueError, "time_step_s"):
             validate_scenario(scenario)
+
+    def test_rejects_invalid_runtime_settings(self) -> None:
+        cases = (
+            ("simulation", "output_rate_hz", 0.0, "output_rate_hz"),
+            ("simulation", "output_rate_hz", 201.0, "output_rate_hz"),
+            ("actuators", "tvc_kp", 0.0, "tvc_kp"),
+            ("actuators", "tvc_kd", 0.0, "tvc_kd"),
+            ("environment", "wind_ned_m_s", [0.0, 0.0], "wind_ned_m_s"),
+            (
+                "environment",
+                "wind_ned_m_s",
+                [0.0, "east", 0.0],
+                "wind_ned_m_s",
+            ),
+        )
+        for section, name, value, message in cases:
+            with self.subTest(section=section, name=name, value=value):
+                scenario = default_scenario()
+                scenario[section][name] = value
+                with self.assertRaisesRegex(ValueError, message):
+                    validate_scenario(scenario)
 
     def test_rejects_nan_and_infinity_anywhere_in_configuration(self) -> None:
         for value in (float("nan"), float("inf"), -float("inf")):
@@ -274,19 +194,11 @@ class ScenarioTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "cyclic or unknown"):
             validate_scenario(scenario)
 
-    def test_accepts_legacy_mission_delays(self) -> None:
+    def test_requires_mission_events(self) -> None:
         scenario = default_scenario()
-        scenario["schema_version"] = LEGACY_SCHEMA_VERSION
-        scenario.pop("vehicle_definition")
         scenario["mission"].pop("events")
-        scenario["mission"].update(
-            {"separation_delay_s": 0.5, "stage2_ignition_delay_s": 1.0}
-        )
-
-        with self.assertWarns(SchemaMigrationWarning):
+        with self.assertRaisesRegex(ValueError, "mission.events"):
             validate_scenario(scenario)
-        self.assertEqual(scenario["schema_version"], SCHEMA_VERSION)
-        self.assertEqual(resolve_mission_events(scenario)["stage2_ignition"], 9.5)
 
 
 if __name__ == "__main__":

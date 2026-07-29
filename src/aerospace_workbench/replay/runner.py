@@ -14,15 +14,17 @@ from ..flight_software.abi import (
     decode_faults,
 )
 from ..flight_software.bridge import (
+    FSW_SENSOR_DIAGNOSTIC_FIELDS,
     FlightCore,
+    fsw_sensor_diagnostics_to_row,
     sensor_frame_from_row,
 )
 from ..configuration.validation import validate_scenario
 from .reader import (
     grouped_sensor_rows,
     load_recorded_commands,
-    normalized_sensor_rows,
     open_sensor_log,
+    validated_sensor_rows,
 )
 
 REPLAY_FIELDS = (
@@ -30,6 +32,7 @@ REPLAY_FIELDS = (
     "time_s",
     "mode",
     "navigation_status",
+    *FSW_SENSOR_DIAGNOSTIC_FIELDS,
     "stage_separate",
     "stage2_ignite",
     "deploy_drogue",
@@ -84,7 +87,8 @@ def replay_fsw(
         "upper_stage": FSW_BODY_UPPER,
     }
     recorded_commands = load_recorded_commands(sensor_path)
-    command_source = "recorded" if recorded_commands else "legacy_synthesized"
+    if not recorded_commands:
+        raise ValueError("replay requires commands.csv beside the sensor log")
     cores: dict[str, FlightCore] = {}
     try:
         with (
@@ -94,10 +98,10 @@ def replay_fsw(
             writer = csv.DictWriter(destination, fieldnames=REPLAY_FIELDS)
             writer.writeheader()
             for rows in grouped_sensor_rows(
-                normalized_sensor_rows(reader, sensor_path)
+                validated_sensor_rows(reader, sensor_path)
             ):
                 row = rows[0]
-                body = row.get("body", "")
+                body = row["body"]
                 if body not in roles:
                     raise ValueError(f"unknown replay body {body!r}")
                 core = cores.get(body)
@@ -108,13 +112,13 @@ def replay_fsw(
                         core = FlightCore(
                             scenario,
                             roles[body],
-                            auto_commands=not bool(recorded_commands),
+                            auto_commands=False,
                         )
                     cores[body] = core
                 frames = [
                     sensor_frame_from_row(channel_row)
                     for channel_row in sorted(
-                        rows, key=lambda item: int(item.get("channel", 0))
+                        rows, key=lambda item: int(item["channel"])
                     )
                 ]
                 frame = frames[0]
@@ -125,8 +129,6 @@ def replay_fsw(
                             (body, round(float(row["time_s"]), 9)),
                             0,
                         )
-                        if recorded_commands
-                        else None
                     ),
                     sensor_channels=frames[1:],
                     previous_execution_time_s=0.0,
@@ -140,6 +142,7 @@ def replay_fsw(
                         "navigation_status": NAVIGATION_STATUS_NAMES[
                             result.navigation_status
                         ],
+                        **fsw_sensor_diagnostics_to_row(result),
                         "stage_separate": result.stage_separate,
                         "stage2_ignite": result.stage2_ignite,
                         "deploy_drogue": result.deploy_drogue,
@@ -195,7 +198,7 @@ def replay_fsw(
                         "command_type": result.command_type,
                         "command_result": result.command_result,
                         "inhibit_flags": result.inhibit_flags,
-                        "command_source": command_source,
+                        "command_source": "recorded",
                         "faults": decode_faults(
                             result.active_fault_flags
                             | result.latched_fault_flags

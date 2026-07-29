@@ -29,6 +29,8 @@ enum FswStatus {
 enum FswBodyRole {
     FSW_BODY_INTEGRATED = 0,
     FSW_BODY_CORE = 1,
+    /* Starts in INTERSTAGE. Fresh asserted separation feedback establishes
+       the local separation epoch; integrated-controller handoff is optional. */
     FSW_BODY_UPPER = 2
 };
 
@@ -181,6 +183,7 @@ typedef struct {
     double propulsion_status_timeout_s;
     double discrete_feedback_timeout_s;
     double platform_status_timeout_s;
+    double max_voter_sample_skew_s;
     double acceleration_disagreement_m_s2;
     double gyro_disagreement_rad_s;
     double magnetic_disagreement;

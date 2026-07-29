@@ -162,18 +162,17 @@ awb replay runs/<run>/sensors.csv.gz
 ```
 
 The controller consumes the complete mission attitude schedule with piecewise
-pitch and launch-relative azimuth interpolation. Its v0.5 ABI accepts typed
+pitch and launch-relative azimuth interpolation. Its v0.8 ABI accepts typed
 sensor, air-data, propulsion, discrete-feedback, command, and platform-timing
 inputs. It votes up to three independently timestamped accelerometer/gyro,
 magnetometer, barometer, and GNSS channels, propagates a minimal ECEF
 navigation state, emits sequence-identified one-shot recovery commands,
+fuses only samples within `max_voter_sample_skew_s` of the freshest channel,
 performs deterministic rejection/recovery, and reports channel health,
 uncertainty, ECEF estimates, command inhibits, timing, and active/latched
-faults. Existing
-single-sensor logs remain replayable through the Python bridge. Recorded
-commands replay from `commands.csv`; older runs use the legacy deterministic
-launch schedule. The upper stage keeps the integrated-stack controller state
-through separation.
+faults. Replay requires the current sensor-stream schema and recorded commands
+from `commands.csv`. The upper stage keeps the integrated-stack controller
+state through separation.
 
 Current controller limitations remain explicit:
 
@@ -205,9 +204,7 @@ separate `aerospace-workbench.vehicle.v1` file:
 The loader resolves both files before simulation. Run evidence writes separate,
 self-contained `scenario.json` and `vehicle_definition.json` snapshots with
 canonical schema identifiers while preserving the original files separately.
-Recognized legacy schemas remain readable with a deprecation warning. See
-[`docs/SCHEMA_MIGRATION.md`](docs/SCHEMA_MIGRATION.md) for the migration table
-and compatibility behavior.
+Persisted inputs with missing or mismatched schema identifiers are rejected.
 
 ## Digital Twin Scope
 

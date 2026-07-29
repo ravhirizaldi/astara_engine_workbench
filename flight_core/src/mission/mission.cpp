@@ -67,7 +67,8 @@ void update_integrated_mode(
             break;
         case FSW_MODE_IGNITION:
             if (
-                context.navigation.attitude_valid
+                voted.accelerometer_valid
+                && context.navigation.attitude_valid
                 && propulsion_fresh(context, input)
                 && input.propulsion.running
                 && persisted(
@@ -94,7 +95,8 @@ void update_integrated_mode(
                 && suite.time_s - context.mission.ignition_confirmed_s
                     >= context.config.stage1_burn_s
                 && persisted(
-                    context.navigation.attitude_valid
+                    voted.accelerometer_valid
+                        && context.navigation.attitude_valid
                         && voted.acceleration[0] < 2.0,
                     context.timing.step_delta_s,
                     0.05,
@@ -138,6 +140,16 @@ void update_integrated_mode(
             }
             break;
         case FSW_MODE_INTERSTAGE:
+            if (
+                context.mission.separation_confirmed_s < 0.0
+                && discrete_asserted(
+                    input.discretes.stage_separated,
+                    suite.time_s,
+                    context.config.discrete_feedback_timeout_s
+                )
+            ) {
+                context.mission.separation_confirmed_s = suite.time_s;
+            }
             if (
                 context.mission.stage2_ignition_commanded_s < 0.0
                 && context.mission.separation_confirmed_s >= 0.0
@@ -204,7 +216,11 @@ void update_mode(
         || context.mission.mode == FSW_MODE_BOOST_1
         || context.mission.mode == FSW_MODE_BOOST_2;
     if (persisted(
-        powered && !context.navigation.attitude_valid,
+        powered
+            && (
+                !voted.imu_valid
+                || !context.navigation.attitude_valid
+            ),
         context.timing.step_delta_s,
         context.config.imu_loss_abort_delay_s,
         context.mission.imu_loss_evidence_s

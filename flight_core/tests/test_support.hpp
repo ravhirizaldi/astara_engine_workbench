@@ -44,6 +44,7 @@ FswConfig default_config() {
     config.propulsion_status_timeout_s = 0.07;
     config.discrete_feedback_timeout_s = 0.08;
     config.platform_status_timeout_s = 0.09;
+    config.max_voter_sample_skew_s = 0.01;
     config.acceleration_disagreement_m_s2 = 0.5;
     config.gyro_disagreement_rad_s = 0.01;
     config.magnetic_disagreement = 0.1;

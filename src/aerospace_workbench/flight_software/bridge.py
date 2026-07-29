@@ -83,6 +83,59 @@ SENSOR_CSV_FIELDS = (
     "main_deployed",
 )
 
+FSW_SENSOR_NAMES = (
+    "accelerometer",
+    "gyroscope",
+    "magnetometer",
+    "barometer",
+    "gnss",
+)
+
+FSW_SENSOR_DIAGNOSTIC_FIELDS = (
+    *(f"{name}_usable_mask" for name in FSW_SENSOR_NAMES),
+    *(f"{name}_rejected_mask" for name in FSW_SENSOR_NAMES),
+    "disagreement_flags",
+    "sensor_status_flags",
+    *(
+        f"{name}_health_{channel}"
+        for name in FSW_SENSOR_NAMES
+        for channel in range(FSW_MAX_SENSOR_CHANNELS)
+    ),
+    *(
+        f"{name}_age_s_{channel}"
+        for name in FSW_SENSOR_NAMES
+        for channel in range(FSW_MAX_SENSOR_CHANNELS)
+    ),
+)
+
+
+def fsw_sensor_diagnostics_to_row(
+    output: FswOutput,
+) -> dict[str, float | int]:
+    row = {
+        **{
+            f"{name}_usable_mask": int(
+                getattr(output, f"{name}_usable_mask")
+            )
+            for name in FSW_SENSOR_NAMES
+        },
+        **{
+            f"{name}_rejected_mask": int(
+                getattr(output, f"{name}_rejected_mask")
+            )
+            for name in FSW_SENSOR_NAMES
+        },
+        "disagreement_flags": int(output.disagreement_flags),
+        "sensor_status_flags": int(output.sensor_status_flags),
+    }
+    for name in FSW_SENSOR_NAMES:
+        health = getattr(output, f"{name}_health_flags")
+        age = getattr(output, f"{name}_age_s")
+        for channel in range(FSW_MAX_SENSOR_CHANNELS):
+            row[f"{name}_health_{channel}"] = int(health[channel])
+            row[f"{name}_age_s_{channel}"] = float(age[channel])
+    return row
+
 
 def sensor_frame_to_row(
     body: str, frame: SensorFrame, channel: int = 0
@@ -166,17 +219,17 @@ def sensor_frame_from_row(row: Mapping[str, str]) -> SensorFrame:
         int(row["gnss_valid"]),
         int(row["barometer_valid"]),
         int(row["stage_separated"]),
-        float(row.get("barometer_sample_time_s") or row["time_s"]),
-        float(row.get("gnss_sample_time_s") or row["time_s"]),
-        int(row.get("propulsion_ready", "1")),
-        int(row.get("propulsion_running", int(float(row["time_s"]) > 0.0))),
-        int(row.get("drogue_deployed", "0")),
-        int(row.get("main_deployed", "0")),
-        float(row.get("imu_sample_time_s") or row["time_s"]),
-        float(row.get("magnetometer_sample_time_s") or row["time_s"]),
-        int(row.get("accel_valid", "1")),
-        int(row.get("gyro_valid", "1")),
-        int(row.get("magnetometer_valid", "1")),
+        float(row["barometer_sample_time_s"]),
+        float(row["gnss_sample_time_s"]),
+        int(row["propulsion_ready"]),
+        int(row["propulsion_running"]),
+        int(row["drogue_deployed"]),
+        int(row["main_deployed"]),
+        float(row["imu_sample_time_s"]),
+        float(row["magnetometer_sample_time_s"]),
+        int(row["accel_valid"]),
+        int(row["gyro_valid"]),
+        int(row["magnetometer_valid"]),
     )
 
 
@@ -426,6 +479,9 @@ class FlightCore:
                 "platform_status_timeout_s",
                 config.imu_timeout_s,
             )
+        )
+        config.max_voter_sample_skew_s = float(
+            sensors.get("max_voter_sample_skew_s", 0.01)
         )
         config.acceleration_disagreement_m_s2 = float(
             sensors.get(
