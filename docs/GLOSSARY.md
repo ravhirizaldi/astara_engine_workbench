@@ -19,7 +19,7 @@ run artifacts, and architecture documents.
 | **I/O** | Input/Output | Data crossing a software or hardware boundary. ASTARA Flight Core currently exposes no physical ignition, valve, serial, GPIO, or flight-termination I/O. |
 | **GPIO** | General-Purpose Input/Output | Digital hardware pins. Mentioned only as an excluded physical interface in the current safety boundary. |
 | **GUI** | Graphical User Interface | The desktop workbench interface used to select scenarios, run simulations, replay results, and inspect plots and telemetry. |
-| **CLI** | Command-Line Interface | Commands such as `python3 -m astara simulate`, `validate`, `analyze`, and `replay`. |
+| **CLI** | Command-Line Interface | Commands such as `awb simulate`, `awb validate`, `awb analyze`, and `awb replay`; `python3 -m aerospace_workbench` is the module form. |
 
 ## Interfaces and data contracts
 
@@ -31,7 +31,7 @@ run artifacts, and architecture documents.
 | **FFI** | Foreign Function Interface | A mechanism for one programming language to call another. Python-to-C++ calls through the C ABI are an FFI boundary. |
 | **Schema** | Machine-readable data structure contract | Scenario, vehicle, and run artifacts carry explicit schema versions such as `astara.scenario.v1` and `astara.vehicle.v1`. |
 | **Typed input/output** | Fields with explicit meaning, units, and structure | Flight Core receives structured sensor, command, propulsion, recovery, air-data, and timing fields instead of an unstructured dictionary or byte stream. |
-| **Replay** | Re-execution from recorded inputs | `astara replay` sends a recorded sensor and command stream through the same Flight Core without rerunning vehicle truth dynamics. |
+| **Replay** | Re-execution from recorded inputs | `awb replay` sends a recorded sensor and command stream through the same Flight Core without rerunning vehicle truth dynamics. |
 | **Artifact** | Persisted output from a run | Examples include `truth.csv`, `sensors.csv.gz`, `commands.csv`, `fsw.csv`, `events.csv`, and `manifest.json`. |
 | **Manifest** | Run metadata and integrity record | Stores scenario identity, model version, seed, coordinate frames, checks, timing mode, hashes, and result status. |
 | **SHA-256** | Secure Hash Algorithm, 256-bit | Used to identify scenario, vehicle, model source, and generated artifacts reproducibly. |

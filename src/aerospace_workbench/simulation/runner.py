@@ -5,10 +5,9 @@ from __future__ import annotations
 import csv
 import ctypes
 import gzip
-import hashlib
 import json
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -16,14 +15,17 @@ from typing import Any, Callable
 import numpy as np
 
 from .. import __version__
-from ..aero import AeroResult, atmosphere, estimate
+from .aerodynamics import AeroResult, atmosphere, estimate
 from ..configuration.scenarios import (
-    evidence_documents,
     model_source_hash,
     scenario_hash,
-    validate_scenario,
 )
-from ..flight_core import (
+from ..configuration.schemas import RUN_SCHEMA_VERSION
+from ..configuration.validation import validate_scenario
+from ..configuration.vehicles import evidence_documents
+from ..evidence.artifacts import sha256_file, write_csv, write_json
+from ..evidence.manifest import register_artifacts, write_manifest
+from ..flight_software.abi import (
     FSW_BODY_CORE,
     FSW_BODY_INTEGRATED,
     FSW_DISCRETE_ACTION_DEPLOY_DROGUE,
@@ -31,164 +33,56 @@ from ..flight_core import (
     FSW_DISCRETE_ACTION_STAGE_SEPARATE,
     MODE_NAMES,
     NAVIGATION_STATUS_NAMES,
-    SENSOR_CSV_FIELDS,
-    FlightCore,
     FswOutput,
     SensorFrame,
     decode_faults,
+)
+from ..flight_software.bridge import (
+    SENSOR_CSV_FIELDS,
+    FlightCore,
     sensor_frame_to_row,
 )
-from ..math3d import (
+from ..flight_software.timing import (
+    FSW_TIMING_MODES,
+    validate_timing_options,
+)
+from ..mathematics.frames import (
     EARTH_MU,
     EARTH_RADIUS_M,
     EARTH_ROTATION_RAD_S,
-    cross3,
     ecef_to_geodetic,
     ecef_to_ned,
     geodetic_to_ecef,
     initial_attitude,
     ned_to_ecef,
+)
+from ..mathematics.quaternions import (
     quat_conjugate,
     quat_derivative,
     quat_normalize,
     quat_rotate,
     quat_to_euler,
+)
+from ..mathematics.vectors import (
+    cross3,
     unit,
 )
-
-FSW_TIMING_MODES = ("deterministic", "measured", "injected")
-
-
-@dataclass
-class SensorChannelState:
-    accelerometer_bias_m_s2: np.ndarray
-    gyro_bias_rad_s: np.ndarray
-    magnetometer_bias: np.ndarray
-    barometer_bias_m: float
-    gnss_position_bias_m: np.ndarray
-    gnss_velocity_bias_m_s: np.ndarray
-    acceleration_body_m_s2: np.ndarray = field(
-        default_factory=lambda: np.zeros(3)
-    )
-    gyro_body_rad_s: np.ndarray = field(
-        default_factory=lambda: np.zeros(3)
-    )
-    magnetic_body: np.ndarray = field(
-        default_factory=lambda: np.array([1.0, 0.0, 0.0])
-    )
-    barometric_altitude_m: float = 0.0
-    gnss_position_ecef_m: np.ndarray = field(
-        default_factory=lambda: np.zeros(3)
-    )
-    gnss_velocity_ecef_m_s: np.ndarray = field(
-        default_factory=lambda: np.zeros(3)
-    )
-    imu_sample_time_s: float = 0.0
-    magnetometer_sample_time_s: float = 0.0
-    barometer_sample_time_s: float = 0.0
-    gnss_sample_time_s: float = 0.0
-    next_imu_sample_s: float = 0.0
-    next_magnetometer_sample_s: float = 0.0
-    next_barometer_sample_s: float = 0.0
-    next_gnss_sample_s: float = 0.0
-    initialized: bool = False
-    fault_state: tuple[str, ...] = ()
-
-
-@dataclass
-class Body:
-    name: str
-    stage_index: int
-    stage: dict[str, Any]
-    position_ecef_m: np.ndarray
-    velocity_ecef_m_s: np.ndarray
-    attitude_wxyz: np.ndarray
-    body_rates_rad_s: np.ndarray
-    fuel_kg: float
-    oxidizer_kg: float
-    upper_mass_kg: float = 0.0
-    stacked_length_m: float | None = None
-    landed: bool = False
-    engine_started_s: float | None = None
-    engine_health_percent: float = 100.0
-    drogue_deployed: bool = False
-    main_deployed: bool = False
-    parachute_deployed_s: float | None = None
-    last_specific_force_body_m_s2: np.ndarray = field(
-        default_factory=lambda: np.zeros(3)
-    )
-    last_dynamic_pressure_pa: float = 0.0
-    last_mach: float = 0.0
-    last_angle_of_attack_deg: float = 0.0
-    aero_valid: bool = True
-    sensor_channels: list[SensorChannelState] = field(default_factory=list)
-    next_fsw_sample_s: float = 0.0
-    last_discrete_actuation_sequence: int = 0
-    last_tvc_rad: np.ndarray = field(default_factory=lambda: np.zeros(2))
-    last_fin_rad: np.ndarray = field(default_factory=lambda: np.zeros(3))
-    last_engine_thrusts_n: dict[str, float] = field(default_factory=dict)
-
-    @property
-    def mass_kg(self) -> float:
-        return (
-            float(self.stage["dry_mass_kg"])
-            + self.fuel_kg
-            + self.oxidizer_kg
-            + self.upper_mass_kg
-        )
-
-    @property
-    def propellant_fraction(self) -> float:
-        initial = float(self.stage["fuel_mass_kg"]) + float(
-            self.stage["oxidizer_mass_kg"]
-        )
-        return min(max((self.fuel_kg + self.oxidizer_kg) / initial, 0.0), 1.0)
-
-    @property
-    def center_of_mass_m(self) -> float:
-        table = self.stage.get("mass_properties")
-        if not table:
-            return float(self.stage["center_of_mass_m"])
-        return float(
-            np.interp(
-                self.propellant_fraction,
-                [row["propellant_fraction"] for row in table],
-                [row["center_of_mass_m"] for row in table],
-            )
-        )
-
-    @property
-    def inertia_kg_m2(self) -> np.ndarray:
-        table = self.stage.get("mass_properties")
-        if table:
-            inertia = np.array(
-                [
-                    np.interp(
-                        self.propellant_fraction,
-                        [row["propellant_fraction"] for row in table],
-                        [row["inertia_kg_m2"][axis] for row in table],
-                    )
-                    for axis in range(3)
-                ]
-            )
-        else:
-            inertia = np.asarray(self.stage["inertia_kg_m2"], dtype=float)
-        if self.upper_mass_kg > 0.0:
-            inertia = inertia + np.array(
-                [2.4, self.upper_mass_kg * 2.2**2, self.upper_mass_kg * 2.2**2]
-            )
-        return np.maximum(inertia, 1e-3)
-
-    def aerodynamic_stage(self) -> dict[str, Any]:
-        combined = dict(self.stage)
-        combined["center_of_mass_m"] = self.center_of_mass_m
-        if self.stacked_length_m is None:
-            return combined
-        combined["length_m"] = self.stacked_length_m
-        combined["center_of_mass_m"] = self.stacked_length_m * 0.54
-        combined["aerodynamics"] = dict(self.stage["aerodynamics"])
-        combined["aerodynamics"]["center_of_pressure_m"] = self.stacked_length_m * 0.68
-        return combined
+from .events import event, flight_mode_events
+from .actuators import (
+    actuator_commands as _actuator_commands,
+    consume_discrete_actuation as _consume_discrete_actuation,
+)
+from .sensors import (
+    SensorChannelState,
+    apply_sensor_faults as _apply_sensor_faults,
+    fault_active as _fault_active,
+    sensor_faults as _sensor_faults,
+)
+from .propulsion import (
+    propulsion_step as _propulsion,
+    stage_engines as _stage_engines,
+)
+from .truth_model import Body, stage_total_mass as _stage_total_mass
 
 
 @dataclass
@@ -198,72 +92,6 @@ class RunResult:
     telemetry: list[dict[str, Any]]
     fsw_telemetry: list[dict[str, Any]]
     events: list[dict[str, Any]]
-
-
-def _stage_total_mass(stage: dict[str, Any]) -> float:
-    return stage["dry_mass_kg"] + stage["fuel_mass_kg"] + stage["oxidizer_mass_kg"]
-
-
-def _stage_engines(stage: dict[str, Any]) -> list[dict[str, Any]]:
-    return stage.get("engines") or [
-        {
-            "id": f"{stage.get('name', 'stage')}-engine-1",
-            "position_body_m": [0.0, 0.0, 0.0],
-            "direction_body": [1.0, 0.0, 0.0],
-            "performance_scale": 1.0,
-            "enabled": True,
-            "gimbal_enabled": True,
-        }
-    ]
-
-
-def _fault_active(
-    scenario: dict[str, Any],
-    body: str,
-    sensor: str,
-    time_s: float,
-    channel: int | None = None,
-) -> dict[str, Any] | None:
-    for fault in scenario.get("faults", []):
-        start = float(fault.get("start_s", 0.0))
-        end = start + float(fault.get("duration_s", math.inf))
-        target = fault.get("component", fault.get("sensor"))
-        if (
-            fault.get("body", "all") in ("all", body)
-            and target == sensor
-            and (
-                channel is None
-                or "channel" not in fault
-                or int(fault["channel"]) == channel
-            )
-            and start <= time_s <= end
-        ):
-            return fault
-    return None
-
-
-def _sensor_faults(
-    scenario: dict[str, Any],
-    body: str,
-    sensor: str,
-    time_s: float,
-    channel: int,
-) -> list[dict[str, Any]]:
-    return [
-        fault
-        for fault in scenario.get("faults", [])
-        if (
-            fault.get("body", "all") in ("all", body)
-            and fault.get("component", fault.get("sensor")) == sensor
-            and (
-                "channel" not in fault
-                or int(fault["channel"]) == channel
-            )
-            and float(fault.get("start_s", 0.0)) <= time_s
-            <= float(fault.get("start_s", 0.0))
-                + float(fault.get("duration_s", math.inf))
-        )
-    ]
 
 
 def _channel_state(
@@ -305,52 +133,6 @@ def _channel_state(
             )
         )
     return body.sensor_channels[channel]
-
-
-def _apply_sensor_faults(
-    value: np.ndarray,
-    previous: np.ndarray,
-    sample_time_s: float,
-    previous_time_s: float,
-    faults: list[dict[str, Any]],
-) -> tuple[np.ndarray, float, int]:
-    result = value.copy()
-    timestamp = sample_time_s
-    valid = 1
-    kinds = {str(fault.get("type")) for fault in faults}
-    if "dropout" in kinds:
-        result, timestamp, valid = previous.copy(), previous_time_s, 0
-    elif "stale" in kinds:
-        result, timestamp = previous.copy(), previous_time_s
-    elif "freeze" in kinds:
-        result = previous.copy()
-    for fault in faults:
-        if fault.get("type") == "scale_error":
-            result *= float(fault.get("value", 1.0))
-    for fault in faults:
-        if fault.get("type") == "bias":
-            result += float(fault.get("value", 0.0))
-    if "stuck-valid" in kinds:
-        valid = 1
-    return result, timestamp, valid
-
-
-def _engine_fault_active(
-    scenario: dict[str, Any], body: str, engine_id: str, time_s: float
-) -> dict[str, Any] | None:
-    for fault in scenario.get("faults", []):
-        start = float(fault.get("start_s", 0.0))
-        end = start + float(fault.get("duration_s", math.inf))
-        target = fault.get("component", fault.get("sensor"))
-        target_engine = fault.get("engine_id", "all")
-        if (
-            fault.get("body", "all") in ("all", body)
-            and target == "engine"
-            and target_engine in ("all", engine_id)
-            and start <= time_s <= end
-        ):
-            return fault
-    return None
 
 
 def _sensor_frame(
@@ -627,175 +409,6 @@ def _run_fsw_substeps(
     return output
 
 
-def _ramp(time_since_start: float, burn_duration: float) -> float:
-    ramp_duration = min(0.35, burn_duration * 0.08)
-    return max(
-        0.0,
-        min(
-            1.0,
-            time_since_start / ramp_duration,
-            (burn_duration - time_since_start) / ramp_duration,
-        ),
-    )
-
-
-def _propulsion(
-    body: Body,
-    output: FswOutput,
-    time_s: float,
-    dt_s: float,
-    scenario: dict[str, Any],
-) -> tuple[float, float, float]:
-    propulsion = body.stage["propulsion"]
-    engines = _stage_engines(body.stage)
-    body.last_engine_thrusts_n = {engine["id"]: 0.0 for engine in engines}
-    should_burn = False
-    if body.stage_index == 0 and body.upper_mass_kg > 0.0:
-        if output.stage1_ignite and body.engine_started_s is None:
-            body.engine_started_s = time_s
-        should_burn = body.engine_started_s is not None
-    if body.stage_index == 1 and output.stage2_ignite:
-        if body.engine_started_s is None:
-            body.engine_started_s = time_s
-        should_burn = True
-    if output.abort:
-        should_burn = False
-    start = body.engine_started_s or 0.0
-    elapsed = time_s - start
-    duration = float(propulsion["burn_duration_s"])
-    if not should_burn or elapsed < 0.0 or elapsed >= duration:
-        return 0.0, 0.0, 293.15
-    curve = propulsion.get("performance_curve")
-    if curve:
-        times = [row["time_s"] for row in curve]
-        base_fuel_flow = float(
-            np.interp(elapsed, times, [row["fuel_flow_kg_s"] for row in curve])
-        )
-        base_oxidizer_flow = float(
-            np.interp(elapsed, times, [row["oxidizer_flow_kg_s"] for row in curve])
-        )
-        base_thrust = float(np.interp(elapsed, times, [row["thrust_n"] for row in curve]))
-        chamber_pressure = float(
-            np.interp(elapsed, times, [row["chamber_pressure_pa"] for row in curve])
-        )
-        temperature = float(
-            np.interp(elapsed, times, [row["temperature_k"] for row in curve])
-        )
-    else:
-        ramp = _ramp(elapsed, duration)
-        base_fuel_flow = float(propulsion["fuel_flow_kg_s"]) * ramp
-        base_oxidizer_flow = float(propulsion["oxidizer_flow_kg_s"]) * ramp
-        base_thrust = (
-            (base_fuel_flow + base_oxidizer_flow)
-            * float(propulsion["c_star_m_s"])
-            * float(propulsion["thrust_coefficient"])
-            * float(propulsion["nozzle_efficiency"])
-        )
-        chamber_pressure = float(propulsion["chamber_pressure_pa"]) * ramp
-        temperature = 293.15 + (
-            float(propulsion["combustion_temperature_k"]) - 293.15
-        ) * ramp
-
-    flow_scale = 0.0
-    thrust_scales: dict[str, float] = {}
-    temperature_increase = 0.0
-    for engine in engines:
-        scale = (
-            float(engine.get("performance_scale", 1.0))
-            if engine.get("enabled", True)
-            else 0.0
-        )
-        fault = _engine_fault_active(scenario, body.name, engine["id"], time_s)
-        if fault and fault.get("type") == "cutoff":
-            scale = 0.0
-        flow_scale += scale
-        thrust_scale = scale
-        if fault and fault.get("type") == "thrust_scale":
-            thrust_scale *= max(float(fault.get("value", 1.0)), 0.0)
-        if fault and fault.get("type") == "overtemperature":
-            temperature_increase = max(
-                temperature_increase, max(float(fault.get("value", 0.0)), 0.0)
-            )
-        thrust_scales[engine["id"]] = thrust_scale
-
-    if flow_scale <= 0.0:
-        return 0.0, 0.0, 293.15
-
-    requested_fuel_flow = base_fuel_flow * flow_scale
-    requested_oxidizer_flow = base_oxidizer_flow * flow_scale
-    availability = 1.0
-    if requested_fuel_flow > 0.0:
-        availability = min(availability, body.fuel_kg / (requested_fuel_flow * dt_s))
-    if requested_oxidizer_flow > 0.0:
-        availability = min(
-            availability, body.oxidizer_kg / (requested_oxidizer_flow * dt_s)
-        )
-    availability = min(max(availability, 0.0), 1.0)
-    body.fuel_kg -= requested_fuel_flow * availability * dt_s
-    body.oxidizer_kg -= requested_oxidizer_flow * availability * dt_s
-    body.last_engine_thrusts_n = {
-        engine_id: base_thrust * scale * availability
-        for engine_id, scale in thrust_scales.items()
-    }
-    thrust = sum(body.last_engine_thrusts_n.values())
-    temperature += temperature_increase
-    pressure_over = max(chamber_pressure / 2_500_000.0 - 0.8, 0.0)
-    temperature_over = max(temperature / 3_600.0 - 0.85, 0.0)
-    body.engine_health_percent = max(
-        0.0,
-        body.engine_health_percent
-        - dt_s * (0.08 + pressure_over**2 + temperature_over**2),
-    )
-    return thrust, chamber_pressure, temperature
-
-
-def _actuator_commands(
-    output: FswOutput,
-    scenario: dict[str, Any],
-    body: Body,
-    time_s: float,
-    dt_s: float,
-) -> tuple[np.ndarray, np.ndarray]:
-    max_tvc = math.radians(scenario["actuators"]["max_tvc_deg"])
-    max_fin = math.radians(scenario["actuators"]["max_fin_deg"])
-    movable_fins_enabled = body.stage.get("aerodynamics", {}).get(
-        "movable_fins_enabled", False
-    )
-    target_tvc = np.clip(
-        np.array([output.tvc_pitch_rad, output.tvc_yaw_rad]), -max_tvc, max_tvc
-    )
-    target_fin_rad = (
-        np.clip(
-            np.array(
-                [output.fin_roll_rad, output.fin_pitch_rad, output.fin_yaw_rad]
-            ),
-            -max_fin,
-            max_fin,
-        )
-        if movable_fins_enabled
-        else np.zeros(3)
-    )
-    tvc_fault = _fault_active(scenario, body.name, "tvc", time_s)
-    fin_fault = _fault_active(scenario, body.name, "fin", time_s)
-    if tvc_fault and tvc_fault.get("type") == "stuck":
-        target_tvc[:] = math.radians(float(tvc_fault.get("value_deg", 0.0)))
-    if movable_fins_enabled and fin_fault and fin_fault.get("type") == "stuck":
-        target_fin_rad[:] = math.radians(float(fin_fault.get("value_deg", 0.0)))
-    max_delta = math.radians(scenario["actuators"]["max_rate_deg_s"]) * dt_s
-    tvc = body.last_tvc_rad + np.clip(
-        target_tvc - body.last_tvc_rad, -max_delta, max_delta
-    )
-    fin_rad = (
-        body.last_fin_rad
-        + np.clip(target_fin_rad - body.last_fin_rad, -max_delta, max_delta)
-        if movable_fins_enabled
-        else np.zeros(3)
-    )
-    body.last_tvc_rad = tvc
-    body.last_fin_rad = fin_rad
-    return tvc, fin_rad
-
-
 def _forces(
     body: Body,
     scenario: dict[str, Any],
@@ -1010,22 +623,6 @@ def _split_stack(
     return core_stage, upper_stage
 
 
-def _consume_discrete_actuation(
-    body: Body,
-    output: FswOutput,
-    action: int,
-) -> bool:
-    command = output.discrete_actuation
-    if (
-        not command.valid
-        or int(command.action) != action
-        or int(command.sequence) <= body.last_discrete_actuation_sequence
-    ):
-        return False
-    body.last_discrete_actuation_sequence = int(command.sequence)
-    return True
-
-
 def _telemetry_row(
     time_s: float,
     body: Body,
@@ -1125,15 +722,6 @@ def _telemetry_row(
     }
 
 
-def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
-    if not rows:
-        return
-    with path.open("w", newline="", encoding="utf-8") as stream:
-        writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
-        writer.writeheader()
-        writer.writerows(rows)
-
-
 def run_simulation(
     scenario: dict[str, Any],
     seed: int | None = None,
@@ -1151,19 +739,7 @@ def run_simulation(
 ) -> RunResult:
     if summary_only and persist:
         raise ValueError("summary_only cannot persist telemetry")
-    if timing_mode not in FSW_TIMING_MODES:
-        raise ValueError(f"timing_mode must be one of {FSW_TIMING_MODES}")
-    if timing_mode == "injected":
-        if (
-            injected_execution_time_s is None
-            or not math.isfinite(injected_execution_time_s)
-            or injected_execution_time_s < 0.0
-        ):
-            raise ValueError(
-                "injected timing requires a finite, nonnegative execution time"
-            )
-    elif injected_execution_time_s is not None:
-        raise ValueError("injected execution time requires timing_mode='injected'")
+    validate_timing_options(timing_mode, injected_execution_time_s)
     validate_scenario(scenario)
     if seed is None:
         seed = int(scenario.get("simulation", {}).get("seed", 1))
@@ -1227,12 +803,7 @@ def run_simulation(
         "finite_positive_state": True,
     }
     events: list[dict[str, Any]] = [
-        {
-            "time_s": 0.0,
-            "body": "integrated_stack",
-            "event": "simulation_started",
-            "detail": "",
-        }
+        event(0.0, "integrated_stack", "simulation_started")
     ]
     separated = False
     next_output_s = 0.0
@@ -1295,12 +866,12 @@ def run_simulation(
             if should_cancel and should_cancel():
                 cancelled = True
                 events.append(
-                    {
-                        "time_s": time_s,
-                        "body": "integrated_stack" if not separated else "all",
-                        "event": "simulation_cancelled",
-                        "detail": "operator request",
-                    }
+                    event(
+                        time_s,
+                        "integrated_stack" if not separated else "all",
+                        "simulation_cancelled",
+                        "operator request",
+                    )
                 )
                 break
             for body in list(bodies):
@@ -1320,50 +891,14 @@ def run_simulation(
                 outputs[body.name] = output
                 previous_mode = previous_modes.get(body.name)
                 if previous_mode != output.mode:
-                    mode_name = MODE_NAMES[output.mode]
-                    events.append(
-                        {
-                            "time_s": time_s,
-                            "body": body.name,
-                            "event": "flight_mode",
-                            "detail": mode_name,
-                        }
+                    events.extend(
+                        flight_mode_events(
+                            time_s,
+                            body.name,
+                            previous_mode,
+                            output.mode,
+                        )
                     )
-                    if (
-                        previous_mode is not None
-                        and MODE_NAMES[previous_mode] == "BOOST_1"
-                        and mode_name == "SEPARATION"
-                    ):
-                        events.append(
-                            {
-                                "time_s": time_s,
-                                "body": body.name,
-                                "event": "burnout_stage_1",
-                                "detail": "",
-                            }
-                        )
-                    if mode_name == "BOOST_2":
-                        events.append(
-                            {
-                                "time_s": time_s,
-                                "body": body.name,
-                                "event": "stage2_ignition",
-                                "detail": "",
-                            }
-                        )
-                    if (
-                        previous_mode is not None
-                        and MODE_NAMES[previous_mode] == "BOOST_2"
-                        and mode_name == "COAST"
-                    ):
-                        events.append(
-                            {
-                                "time_s": time_s,
-                                "body": body.name,
-                                "event": "burnout_stage_2",
-                                "detail": "",
-                            }
-                        )
                     previous_modes[body.name] = output.mode
 
             if (
@@ -1386,12 +921,12 @@ def run_simulation(
                 previous_modes["upper_stage"] = integrated_output.mode
                 separated = True
                 events.append(
-                    {
-                        "time_s": time_s,
-                        "body": "integrated_stack",
-                        "event": "stage_separation",
-                        "detail": "core stage and upper stage created",
-                    }
+                    event(
+                        time_s,
+                        "integrated_stack",
+                        "stage_separation",
+                        "core stage and upper stage created",
+                    )
                 )
                 core_stage.next_fsw_sample_s = time_s
                 upper_stage.next_fsw_sample_s = integrated_stack.next_fsw_sample_s
@@ -1442,24 +977,12 @@ def run_simulation(
                     body.drogue_deployed = True
                     body.parachute_deployed_s = time_s
                     events.append(
-                        {
-                            "time_s": time_s,
-                            "body": body.name,
-                            "event": "drogue_deployed",
-                            "detail": "",
-                        }
+                        event(time_s, body.name, "drogue_deployed")
                     )
                 if deploy_main and not body.main_deployed and not main_failed:
                     body.main_deployed = True
                     body.parachute_deployed_s = time_s
-                    events.append(
-                        {
-                            "time_s": time_s,
-                            "body": body.name,
-                            "event": "main_deployed",
-                            "detail": "",
-                        }
-                    )
+                    events.append(event(time_s, body.name, "main_deployed"))
                 tvc, fins = _actuator_commands(
                     output, scenario, body, time_s, dt_s
                 )
@@ -1478,14 +1001,7 @@ def run_simulation(
                     launch_position,
                 )
                 if body.landed and not was_landed:
-                    events.append(
-                        {
-                            "time_s": time_s,
-                            "body": body.name,
-                            "event": "landed",
-                            "detail": "",
-                        }
-                    )
+                    events.append(event(time_s, body.name, "landed"))
                 current_values[body.name] = (thrust, pressure, temperature)
 
             if time_s + 1e-12 >= next_output_s:
@@ -1679,7 +1195,7 @@ def run_simulation(
         "navigation_altitude_rmse_below_25_m": altitude_rmse_m < 25.0,
     }
     manifest = {
-        "schema_version": "astara.run.v1",
+        "schema_version": RUN_SCHEMA_VERSION,
         "model_version": __version__,
         "model_source_sha256": model_source_hash(),
         "created_utc": datetime.now(timezone.utc).isoformat(),
@@ -1765,19 +1281,13 @@ def run_simulation(
     }
     if persist:
         scenario_document, vehicle_document = evidence_documents(scenario)
-        (output_dir / "scenario.json").write_text(
-            json.dumps(scenario_document, indent=2), encoding="utf-8"
-        )
+        write_json(output_dir / "scenario.json", scenario_document)
         if vehicle_document is not None:
-            (output_dir / "vehicle_definition.json").write_text(
-                json.dumps(vehicle_document, indent=2), encoding="utf-8"
-            )
-        (output_dir / "manifest.json").write_text(
-            json.dumps(manifest, indent=2), encoding="utf-8"
-        )
-        _write_csv(output_dir / "truth.csv", telemetry)
-        _write_csv(output_dir / "fsw.csv", fsw_rows)
-        _write_csv(output_dir / "events.csv", events)
+            write_json(output_dir / "vehicle_definition.json", vehicle_document)
+        write_manifest(output_dir, manifest)
+        write_csv(output_dir / "truth.csv", telemetry)
+        write_csv(output_dir / "fsw.csv", fsw_rows)
+        write_csv(output_dir / "events.csv", events)
         artifact_names = [
             "scenario.json",
             "sensors.csv.gz",
@@ -1788,14 +1298,12 @@ def run_simulation(
         ]
         if vehicle_document is not None:
             artifact_names.append("vehicle_definition.json")
-        for filename in artifact_names:
-            path = output_dir / filename
-            manifest.setdefault("artifacts", {})[filename] = hashlib.sha256(
-                path.read_bytes()
-            ).hexdigest()
-        (output_dir / "manifest.json").write_text(
-            json.dumps(manifest, indent=2), encoding="utf-8"
+        register_artifacts(
+            manifest,
+            output_dir,
+            (output_dir / filename for filename in artifact_names),
         )
+        write_manifest(output_dir, manifest)
     result = RunResult(output_dir, manifest, telemetry, fsw_rows, events)
     rocketpy_config = scenario.get("reference_backends", {}).get("rocketpy", {})
     if (
@@ -1805,7 +1313,7 @@ def run_simulation(
         and rocketpy_config.get("enabled", False)
     ):
         try:
-            from ..rocketpy_adapter import run_rocketpy_reference
+            from ..adapters.rocketpy import run_rocketpy_reference
 
             reference = run_rocketpy_reference(scenario, telemetry, output_dir)
         except Exception as error:
@@ -1819,14 +1327,10 @@ def run_simulation(
                 "artifact": "rocketpy_reference.json",
             }
             path = output_dir / "rocketpy_reference.json"
-            manifest.setdefault("artifacts", {})[path.name] = hashlib.sha256(
-                path.read_bytes()
-            ).hexdigest()
-        (output_dir / "manifest.json").write_text(
-            json.dumps(manifest, indent=2), encoding="utf-8"
-        )
+            manifest.setdefault("artifacts", {})[path.name] = sha256_file(path)
+        write_manifest(output_dir, manifest)
     if create_report and persist and not cancelled:
-        from ..reporting import create_report_artifacts
+        from ..evidence.reporting import create_report_artifacts
 
         create_report_artifacts(result)
     return result

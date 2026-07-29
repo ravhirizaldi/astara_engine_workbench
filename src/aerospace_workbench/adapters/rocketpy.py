@@ -9,7 +9,8 @@ from typing import Any
 
 import numpy as np
 
-from .configuration.scenarios import resolve_mission_events
+from ..configuration.scenarios import resolve_mission_events
+from ..configuration.schemas import ROCKETPY_REFERENCE_SCHEMA_VERSION
 
 
 def _enabled_engine_scale(stage: dict[str, Any]) -> float:
@@ -152,7 +153,7 @@ def run_rocketpy_reference(
         for name in reference
     }
     summary = {
-        "schema_version": "astara.rocketpy-reference.v1",
+        "schema_version": ROCKETPY_REFERENCE_SCHEMA_VERSION,
         "rocketpy_version": version("rocketpy"),
         "status": "REFERENCE_ONLY_UNVALIDATED",
         "scope": "Core-stage powered ascent through stage-separation command time.",

@@ -8,7 +8,10 @@ from collections import deque
 from unittest.mock import MagicMock, patch
 
 from aerospace_workbench.configuration.scenarios import default_scenario
-from aerospace_workbench.ui import EngineeringWorkbench, _run_simulation_process
+from aerospace_workbench.presentation.desktop.app import EngineeringWorkbench
+from aerospace_workbench.presentation.desktop.mission_view import (
+    run_simulation_process,
+)
 
 
 class LiveUiTests(unittest.TestCase):
@@ -58,9 +61,11 @@ class LiveUiTests(unittest.TestCase):
         app.root.clipboard_append.assert_called_once_with('{"name": "Anthariksa"}')
         app.status_var.set.assert_called_once_with("Scenario JSON copied to clipboard")
 
-    @patch("aerospace_workbench.ui.subprocess.run")
     @patch(
-        "aerospace_workbench.ui.shutil.which",
+        "aerospace_workbench.presentation.desktop.app.subprocess.run"
+    )
+    @patch(
+        "aerospace_workbench.presentation.desktop.app.shutil.which",
         return_value="/mnt/c/Windows/System32/clip.exe",
     )
     def test_copy_json_uses_windows_clipboard_under_wsl(
@@ -178,7 +183,7 @@ class LiveUiTests(unittest.TestCase):
         pause_event = context.Event()
         speed = context.Value("d", 0.0)
         process = context.Process(
-            target=_run_simulation_process,
+                target=run_simulation_process,
             args=(
                 scenario,
                 1,

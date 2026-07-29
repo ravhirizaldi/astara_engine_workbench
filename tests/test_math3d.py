@@ -2,16 +2,18 @@ import unittest
 
 import numpy as np
 
-from aerospace_workbench.math3d import (
-    cross3,
+from aerospace_workbench.mathematics.frames import (
     ecef_to_geodetic,
     ecef_to_ned,
     geodetic_to_ecef,
     initial_attitude,
     ned_to_ecef,
+)
+from aerospace_workbench.mathematics.quaternions import (
     quat_normalize,
     quat_rotate,
 )
+from aerospace_workbench.mathematics.vectors import cross3
 
 
 class Math3dTests(unittest.TestCase):

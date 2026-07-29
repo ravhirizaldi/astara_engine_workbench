@@ -1,5 +1,19 @@
 # ASTARA Foundation Architecture
 
+## Python package boundaries
+
+`aerospace_workbench` uses a standard `src` layout. Configuration and
+mathematics are leaf packages; simulation composes the truth, sensor,
+actuator, propulsion, aerodynamic, event, and FSW boundaries; evidence and
+replay persist or re-execute results; application and presentation are the
+outer entry points. The package root exposes version metadata only, so
+importing it does not initialize the CLI, solver, Matplotlib, or Tk.
+
+The primary workbench lives under `presentation.desktop.app`. The legacy
+Engine Bench remains an independent module under
+`presentation.desktop.engine_bench` and is launched separately through
+`engine_bench_ui.py`.
+
 ## Data boundary
 
 ```text

@@ -14,22 +14,24 @@ from aerospace_workbench.configuration.scenarios import (
     load_scenario,
     scenario_hash,
 )
-from aerospace_workbench.flight_core import FswOutput
-from aerospace_workbench.math3d import (
+from aerospace_workbench.flight_software.abi import FswOutput
+from aerospace_workbench.mathematics.frames import (
     EARTH_ROTATION_RAD_S,
     geodetic_to_ecef,
     initial_attitude,
+)
+from aerospace_workbench.mathematics.quaternions import (
     quat_conjugate,
     quat_rotate,
 )
+from aerospace_workbench.simulation.actuators import actuator_commands
 from aerospace_workbench.simulation.runner import (
-    Body,
-    _actuator_commands,
-    _apply_sensor_faults,
     _derivative,
     _sensor_frame,
     run_simulation,
 )
+from aerospace_workbench.simulation.sensors import apply_sensor_faults
+from aerospace_workbench.simulation.truth_model import Body
 
 
 class TwinTests(unittest.TestCase):
@@ -194,7 +196,7 @@ class TwinTests(unittest.TestCase):
         )
         self.assertEqual(faulted[2].imu_sample_time_s, 0.005)
 
-        value, timestamp, valid = _apply_sensor_faults(
+        value, timestamp, valid = apply_sensor_faults(
             np.array([4.0]),
             np.array([1.0]),
             2.0,
@@ -225,7 +227,7 @@ class TwinTests(unittest.TestCase):
         output = FswOutput()
         output.fin_roll_rad = output.fin_pitch_rad = output.fin_yaw_rad = 0.1
 
-        _, fins = _actuator_commands(output, scenario, body, 0.0, 0.1)
+        _, fins = actuator_commands(output, scenario, body, 0.0, 0.1)
 
         self.assertTrue(np.array_equal(fins, np.zeros(3)))
 
@@ -311,7 +313,7 @@ class TwinTests(unittest.TestCase):
         )
         timer_ns = iter(range(0, 1_000_000_000, 20_000_000))
         with mock.patch(
-            "aerospace_workbench.flight_core.time.perf_counter_ns",
+            "aerospace_workbench.flight_software.timing.time.perf_counter_ns",
             side_effect=lambda: next(timer_ns),
         ):
             measured = run_simulation(

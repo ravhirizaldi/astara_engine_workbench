@@ -26,13 +26,13 @@ environmental, and flight-test evidence.
 
 ## Files
 
-- `src/aerospace_workbench/` - Python package for scenarios, simulation, CLI, reports, and GUI
+- `src/aerospace_workbench/` - responsibility-based Python package for configuration, simulation, FSW, evidence, replay, CLI, and presentation
 - `flight_core/` - dependency-free C++17 flight-software core and CTest check
 - `scenarios/` - versioned SI-unit mission inputs
 - `vehicles/` - stable mass, geometry, propulsion, aerodynamics, sensors, and actuators
 - `tests/` - Python regression and SIL integration checks
 - `main.py` - ASTARA Engineering Workbench launcher
-- `engine_bench_ui.py` - standalone legacy engine dashboard
+- `engine_bench_ui.py` - standalone launcher for the legacy engine dashboard
 - `requirements.txt` - Python dependencies
 - `runs/` - generated digital-twin evidence
 - `output/` - generated legacy engine PNG/CSV output
@@ -88,6 +88,15 @@ also remains available:
 
 ```bash
 python3 -m aerospace_workbench simulate --seed 1 --no-report
+```
+
+Python integrations should import concrete responsibility modules:
+
+```python
+from aerospace_workbench.configuration.scenarios import load_scenario
+from aerospace_workbench.simulation.runner import run_simulation
+
+result = run_simulation(load_scenario(), seed=1)
 ```
 
 Simulation progress appears automatically in an interactive terminal. Use
@@ -287,8 +296,8 @@ Engine Health panel. Health, cooling efficiency, wall stress, nozzle erosion,
 and combustion instability update during the run. Slider changes during an
 active or paused run are applied after Reset.
 
-Default provisional visualization thresholds are configured near the top of
-`engine_bench_ui.py`:
+Default provisional visualization thresholds are configured in
+`src/aerospace_workbench/presentation/desktop/engine_bench.py`:
 
 - temperature warning / critical / failure: `3200 / 3700 / 4200 K`
 - pressure warning / critical / failure: `1.0 / 1.6 / 2.2 MPa`
@@ -361,7 +370,8 @@ limiting factor, and recommendation to `output/simulation_data.csv`.
 
 ## Tuning
 
-Edit constants near the top of `engine_bench_ui.py`:
+Edit constants near the top of
+`src/aerospace_workbench/presentation/desktop/engine_bench.py`:
 
 - `CHAMBER_VOLUME`
 - `COMBUSTION_TEMPERATURE`

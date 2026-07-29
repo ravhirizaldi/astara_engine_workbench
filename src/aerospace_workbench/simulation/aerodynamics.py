@@ -1,4 +1,4 @@
-"""Aerodynamic estimates for software-in-the-loop use."""
+"""Aerodynamic estimates for the software-in-the-loop truth model."""
 
 from __future__ import annotations
 

@@ -10,15 +10,16 @@ import time
 from pathlib import Path
 from typing import Any, Callable, TextIO
 
-from .analysis import run_credibility_analysis
-from .configuration.scenarios import (
+from ..configuration.scenarios import (
     default_scenario_path,
     load_scenario,
-    validate_scenario,
 )
-from .flight_core import build_library
-from .replay import replay_fsw
-from .simulation.runner import FSW_TIMING_MODES, run_simulation
+from ..configuration.validation import validate_scenario
+from ..evidence.analysis import run_credibility_analysis
+from ..flight_software.build import build_library
+from ..flight_software.timing import FSW_TIMING_MODES
+from ..replay.runner import replay_fsw
+from ..simulation.runner import run_simulation
 
 
 class SimulationProgressReporter:

@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import copy
-import csv
-import hashlib
 import json
 import math
 import os
@@ -17,15 +15,18 @@ from typing import Any, Callable
 
 import numpy as np
 
-from . import __version__
-from .flight_core import build_library
-from .configuration.scenarios import (
-    evidence_documents,
+from .. import __version__
+from ..configuration.scenarios import (
     model_source_hash,
     scenario_hash,
-    validate_scenario,
 )
-from .simulation.runner import RunResult, run_simulation
+from ..configuration.schemas import CREDIBILITY_SCHEMA_VERSION
+from ..configuration.validation import validate_scenario
+from ..configuration.vehicles import evidence_documents
+from ..flight_software.build import build_library
+from ..simulation.runner import RunResult, run_simulation
+from .artifacts import artifact_hashes, write_csv, write_json
+from .retention import same_metric, selected_success_samples
 
 PERCENTILE_METRICS = (
     "maximum_altitude_m",
@@ -237,13 +238,6 @@ def _sample_scenario(
     return sampled, factors
 
 
-def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
-    with path.open("w", newline="", encoding="utf-8") as stream:
-        writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
-        writer.writeheader()
-        writer.writerows(rows)
-
-
 def _percentiles(rows: list[dict[str, Any]]) -> dict[str, dict[str, float | int | None]]:
     summary: dict[str, dict[str, float | int | None]] = {}
     for name in PERCENTILE_METRICS:
@@ -330,16 +324,6 @@ def _monte_carlo_worker(
     }
 
 
-def _same_metric(left: Any, right: Any) -> bool:
-    if left is None or right is None:
-        return left is right
-    if isinstance(left, (int, float)) and isinstance(right, (int, float)):
-        return math.isclose(
-            float(left), float(right), rel_tol=0.0, abs_tol=1e-12
-        )
-    return left == right
-
-
 def _retention_worker(
     job: tuple[
         int,
@@ -368,7 +352,7 @@ def _retention_worker(
         )
         retained_metrics = _metrics(result)
         matches = all(
-            _same_metric(reference.get(name), retained_metrics.get(name))
+            same_metric(reference.get(name), retained_metrics.get(name))
             for name in COMPARISON_FIELDS
         )
         return {
@@ -404,27 +388,6 @@ def _run_jobs(
         return [function(job) for job in jobs]
     with ProcessPoolExecutor(max_workers=active_workers) as executor:
         return list(executor.map(function, jobs, chunksize=1))
-
-
-def _selected_success_samples(
-    rows: list[dict[str, Any]],
-    seed: int,
-    percent: float,
-) -> set[int]:
-    successful = [
-        int(row["sample"]) for row in rows if row["status"] in SUCCESS_STATUSES
-    ]
-    if not successful or percent <= 0.0:
-        return set()
-    count = min(
-        len(successful),
-        max(1, math.ceil(len(successful) * percent / 100.0)),
-    )
-    selection_rng = np.random.default_rng(seed ^ 0x5A17C0DE)
-    return {
-        int(value)
-        for value in selection_rng.choice(successful, size=count, replace=False)
-    }
 
 
 def run_credibility_analysis(
@@ -551,8 +514,11 @@ def run_credibility_analysis(
         if error_traceback:
             worker_errors[int(row["sample"])] = error_traceback
 
-    retained_successes = _selected_success_samples(
-        monte_carlo_rows, seed, telemetry_sample_percent
+    retained_successes = selected_success_samples(
+        monte_carlo_rows,
+        seed,
+        telemetry_sample_percent,
+        SUCCESS_STATUSES,
     )
     retention_reasons = {
         int(row["sample"]): "failure"
@@ -641,18 +607,14 @@ def run_credibility_analysis(
             )
             error_artifacts.append(path)
 
-    _write_csv(output_dir / "convergence.csv", convergence_rows)
-    _write_csv(output_dir / "monte_carlo.csv", monte_carlo_rows)
+    write_csv(output_dir / "convergence.csv", convergence_rows)
+    write_csv(output_dir / "monte_carlo.csv", monte_carlo_rows)
     if retained_rows:
-        _write_csv(output_dir / "retained_runs.csv", retained_rows)
+        write_csv(output_dir / "retained_runs.csv", retained_rows)
     scenario_document, vehicle_document = evidence_documents(scenario)
-    (output_dir / "scenario.json").write_text(
-        json.dumps(scenario_document, indent=2), encoding="utf-8"
-    )
+    write_json(output_dir / "scenario.json", scenario_document)
     if vehicle_document is not None:
-        (output_dir / "vehicle_definition.json").write_text(
-            json.dumps(vehicle_document, indent=2), encoding="utf-8"
-        )
+        write_json(output_dir / "vehicle_definition.json", vehicle_document)
 
     status_counts = Counter(str(row["status"]) for row in monte_carlo_rows)
     reason_counts = Counter(
@@ -661,7 +623,7 @@ def run_credibility_analysis(
         if row["failure_reason"]
     )
     summary = {
-        "schema_version": "astara.credibility.v2",
+        "schema_version": CREDIBILITY_SCHEMA_VERSION,
         "model_version": __version__,
         "model_source_sha256": model_source_hash(),
         "created_utc": datetime.now(timezone.utc).isoformat(),
@@ -716,7 +678,6 @@ def run_credibility_analysis(
         ),
     }
 
-    artifacts = {}
     artifact_paths = [
         output_dir / "scenario.json",
         output_dir / "convergence.csv",
@@ -729,12 +690,6 @@ def run_credibility_analysis(
         *([output_dir / "retained_runs.csv"] if retained_rows else []),
         *error_artifacts,
     ]
-    for path in artifact_paths:
-        artifacts[str(path.relative_to(output_dir))] = hashlib.sha256(
-            path.read_bytes()
-        ).hexdigest()
-    summary["artifacts"] = artifacts
-    (output_dir / "summary.json").write_text(
-        json.dumps(summary, indent=2), encoding="utf-8"
-    )
+    summary["artifacts"] = artifact_hashes(output_dir, artifact_paths)
+    write_json(output_dir / "summary.json", summary)
     return output_dir

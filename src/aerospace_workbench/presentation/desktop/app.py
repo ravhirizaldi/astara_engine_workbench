@@ -8,69 +8,28 @@ import os
 import queue
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 from collections import deque
 from pathlib import Path
 
+os.environ.setdefault(
+    "MPLCONFIGDIR",
+    str(Path(tempfile.gettempdir()) / "aerospace_workbench_matplotlib"),
+)
+
 from matplotlib.figure import Figure
 
-from .configuration.scenarios import (
+from ...configuration.scenarios import (
     default_scenario_path,
     load_scenario,
     load_scenario_documents,
 )
-from .flight_core import build_library
-from .simulation.runner import RunResult, run_simulation
-
-
-def _run_simulation_process(
-    scenario: dict,
-    seed: int,
-    messages,
-    cancel_event,
-    pause_event,
-    speed_factor,
-    persist: bool = True,
-) -> None:
-    last_stream_time = 0.0
-    last_stream_wall = time.perf_counter()
-
-    def stream(time_s: float, rows: list[dict], events: list[dict]) -> None:
-        nonlocal last_stream_time, last_stream_wall
-        while pause_event.is_set() and not cancel_event.is_set():
-            time.sleep(0.05)
-            last_stream_wall = time.perf_counter()
-
-        factor = float(speed_factor.value)
-        if factor > 0.0 and not cancel_event.is_set():
-            target = max(time_s - last_stream_time, 0.0) / factor
-            delay = target - (time.perf_counter() - last_stream_wall)
-            while delay > 0.0 and not cancel_event.is_set():
-                chunk = min(delay, 0.05)
-                time.sleep(chunk)
-                delay -= chunk
-
-        last_stream_time = time_s
-        last_stream_wall = time.perf_counter()
-        try:
-            messages.put_nowait(("sample", (time_s, rows, events)))
-        except queue.Full:
-            pass
-
-    try:
-        result = run_simulation(
-            scenario,
-            seed=seed,
-            create_report=persist,
-            persist=persist,
-            on_sample=stream,
-            should_cancel=cancel_event.is_set,
-        )
-    except Exception as error:
-        messages.put(("failed", f"{type(error).__name__}: {error}"))
-    else:
-        messages.put(("finished", result))
+from ...flight_software.build import build_library
+from ...simulation.runner import RunResult
+from ..plotting import plot_live_telemetry
+from .mission_view import run_simulation_process
 
 
 class EngineeringWorkbench:
@@ -483,7 +442,7 @@ class EngineeringWorkbench:
         self.status_var.set("Mission running — solver process active")
         self.notebook.select(self.run_tab)
         self.simulation_process = self.process_context.Process(
-            target=_run_simulation_process,
+            target=run_simulation_process,
             args=(
                 scenario,
                 self.seed_var.get(),
@@ -683,63 +642,14 @@ class EngineeringWorkbench:
         self.event_text.configure(state="disabled")
 
     def _plot_rows(self, telemetry: list[dict]) -> None:
-        self.altitude_axis.clear()
-        self.speed_axis.clear()
-        self.thrust_axis.clear()
-        self.trajectory_axis.clear()
-        grouped: dict[str, list[dict]] = {}
-        for row in telemetry:
-            grouped.setdefault(row["body"], []).append(row)
-        for body, body_rows in sorted(grouped.items()):
-            stride = max(1, len(body_rows) // self.plot_point_limit)
-            rows = body_rows[::stride]
-            self.altitude_axis.plot(
-                [row["time_s"] for row in rows],
-                [row["altitude_m"] for row in rows],
-                label=body,
-            )
-            self.speed_axis.plot(
-                [row["time_s"] for row in rows],
-                [row["speed_m_s"] for row in rows],
-                label=body,
-            )
-            self.thrust_axis.plot(
-                [row["time_s"] for row in rows],
-                [row["thrust_n"] / 1000.0 for row in rows],
-                label=body,
-            )
-            origin = rows[0]
-            self.trajectory_axis.plot(
-                [
-                    (row["position_ecef_x_m"] - origin["position_ecef_x_m"]) / 1000.0
-                    for row in rows
-                ],
-                [
-                    (row["position_ecef_y_m"] - origin["position_ecef_y_m"]) / 1000.0
-                    for row in rows
-                ],
-                label=body,
-            )
-        self.altitude_axis.set_title("Altitude")
-        self.altitude_axis.set_ylabel("Altitude (m)")
-        self.altitude_axis.set_xlabel("Time (s)")
-        self.speed_axis.set_title("Speed")
-        self.speed_axis.set_ylabel("Speed (m/s)")
-        self.speed_axis.set_xlabel("Time (s)")
-        self.thrust_axis.set_title("Thrust")
-        self.thrust_axis.set_ylabel("Thrust (kN)")
-        self.thrust_axis.set_xlabel("Time (s)")
-        self.trajectory_axis.set_title("Relative ECEF Ground Track")
-        self.trajectory_axis.set_xlabel("ΔX km")
-        self.trajectory_axis.set_ylabel("ΔY km")
-        for axis in (
+        plot_live_telemetry(
             self.altitude_axis,
             self.speed_axis,
             self.thrust_axis,
             self.trajectory_axis,
-        ):
-            axis.grid(True, alpha=0.25)
-            axis.legend(fontsize=7)
+            telemetry,
+            self.plot_point_limit,
+        )
         self.canvas.draw_idle()
 
     def _build_fsw(self) -> None:

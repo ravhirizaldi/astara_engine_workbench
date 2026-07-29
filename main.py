@@ -1,6 +1,6 @@
 """Launch the ASTARA Engineering Workbench."""
 
-from aerospace_workbench.ui import show_workbench
+from aerospace_workbench.presentation.desktop.app import show_workbench
 
 
 def main() -> None:

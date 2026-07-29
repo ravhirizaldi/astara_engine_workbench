@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from aerospace_workbench.configuration.scenarios import default_scenario
-from aerospace_workbench.rocketpy_adapter import run_rocketpy_reference
+from aerospace_workbench.adapters.rocketpy import run_rocketpy_reference
 from aerospace_workbench.simulation.runner import run_simulation
 
 

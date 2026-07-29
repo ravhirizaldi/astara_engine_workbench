@@ -4,14 +4,16 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from aerospace_workbench.flight_core import (
-    SENSOR_CSV_FIELDS,
+from aerospace_workbench.flight_software.abi import (
     SensorFrame,
+)
+from aerospace_workbench.flight_software.bridge import (
+    SENSOR_CSV_FIELDS,
     sensor_frame_from_row,
     sensor_frame_to_row,
 )
 from aerospace_workbench.configuration.scenarios import default_scenario
-from aerospace_workbench.replay import replay_fsw
+from aerospace_workbench.replay.runner import replay_fsw
 
 
 class ReplayTests(unittest.TestCase):

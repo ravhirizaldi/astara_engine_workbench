@@ -5,19 +5,22 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from aerospace_workbench.analysis import (
+from aerospace_workbench.evidence.analysis import (
     _metrics,
-    _selected_success_samples,
     run_credibility_analysis,
     worker_count,
 )
+from aerospace_workbench.evidence.retention import selected_success_samples
 from aerospace_workbench.configuration.scenarios import default_scenario
 from aerospace_workbench.simulation.runner import RunResult, run_simulation
 
 
 class CredibilityAnalysisTests(unittest.TestCase):
     def test_worker_budget_reserves_quarter_of_available_cpus(self) -> None:
-        with patch("aerospace_workbench.analysis.available_cpu_count", return_value=8):
+        with patch(
+            "aerospace_workbench.evidence.analysis.available_cpu_count",
+            return_value=8,
+        ):
             self.assertEqual(worker_count(20), (8, 6))
             self.assertEqual(worker_count(4), (8, 4))
             self.assertEqual(worker_count(20, requested=1), (8, 1))
@@ -28,8 +31,13 @@ class CredibilityAnalysisTests(unittest.TestCase):
         rows = [
             {"sample": sample, "status": "PASS"} for sample in range(1, 101)
         ]
-        first = _selected_success_samples(rows, seed=7, percent=2.0)
-        second = _selected_success_samples(rows, seed=7, percent=2.0)
+        statuses = frozenset({"PASS"})
+        first = selected_success_samples(
+            rows, seed=7, percent=2.0, success_statuses=statuses
+        )
+        second = selected_success_samples(
+            rows, seed=7, percent=2.0, success_statuses=statuses
+        )
         self.assertEqual(first, second)
         self.assertEqual(len(first), 2)
 

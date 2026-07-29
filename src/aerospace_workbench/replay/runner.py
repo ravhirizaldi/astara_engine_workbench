@@ -3,21 +3,26 @@
 from __future__ import annotations
 
 import csv
-import gzip
-import itertools
 from pathlib import Path
 
-from .flight_core import (
+from ..flight_software.abi import (
     FSW_BODY_CORE,
     FSW_BODY_INTEGRATED,
     FSW_BODY_UPPER,
     MODE_NAMES,
     NAVIGATION_STATUS_NAMES,
-    FlightCore,
     decode_faults,
+)
+from ..flight_software.bridge import (
+    FlightCore,
     sensor_frame_from_row,
 )
-from .configuration.scenarios import validate_scenario
+from ..configuration.validation import validate_scenario
+from .reader import (
+    grouped_sensor_rows,
+    load_recorded_commands,
+    open_sensor_log,
+)
 
 REPLAY_FIELDS = (
     "body",
@@ -77,41 +82,17 @@ def replay_fsw(
         "core_stage": FSW_BODY_CORE,
         "upper_stage": FSW_BODY_UPPER,
     }
-    command_path = sensor_path.with_name("commands.csv")
-    recorded_commands: dict[tuple[str, float], int] = {}
-    if command_path.exists():
-        with command_path.open(newline="", encoding="utf-8") as command_file:
-            for command_row in csv.DictReader(command_file):
-                recorded_commands[
-                    (
-                        command_row["body"],
-                        round(float(command_row["time_s"]), 9),
-                    )
-                ] = int(command_row["command_type"])
+    recorded_commands = load_recorded_commands(sensor_path)
     command_source = "recorded" if recorded_commands else "legacy_synthesized"
     cores: dict[str, FlightCore] = {}
     try:
-        source_file = (
-            gzip.open(sensor_path, "rt", newline="", encoding="utf-8")
-            if sensor_path.suffix == ".gz"
-            else sensor_path.open(newline="", encoding="utf-8")
-        )
         with (
-            source_file as source,
+            open_sensor_log(sensor_path) as reader,
             output_path.open("w", newline="", encoding="utf-8") as destination,
         ):
-            reader = csv.DictReader(source)
             writer = csv.DictWriter(destination, fieldnames=REPLAY_FIELDS)
             writer.writeheader()
-            grouped_rows = itertools.groupby(
-                reader,
-                key=lambda item: (
-                    item.get("body", ""),
-                    round(float(item["time_s"]), 9),
-                ),
-            )
-            for _, row_group in grouped_rows:
-                rows = list(row_group)
+            for rows in grouped_sensor_rows(reader):
                 row = rows[0]
                 body = row.get("body", "")
                 if body not in roles:

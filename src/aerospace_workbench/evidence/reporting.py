@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 from collections import defaultdict
-import hashlib
-import json
+import os
+import tempfile
+from pathlib import Path
+
+os.environ.setdefault(
+    "MPLCONFIGDIR",
+    str(Path(tempfile.gettempdir()) / "aerospace_workbench_matplotlib"),
+)
 
 import matplotlib
 
@@ -12,7 +18,8 @@ matplotlib.use("Agg")
 from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.figure import Figure
 
-from .simulation.runner import RunResult
+from ..simulation.runner import RunResult
+from .manifest import register_artifacts, write_manifest
 
 
 def _group(result: RunResult) -> dict[str, list[dict]]:
@@ -117,15 +124,14 @@ def create_report_artifacts(result: RunResult) -> None:
         pdf.savefig(summary)
         for figure in figures:
             pdf.savefig(figure)
-    for filename in (
+    filenames = (
         *[item[3] for item in definitions],
         "trajectory_3d.png",
         "report.pdf",
-    ):
-        path = result.output_dir / filename
-        result.manifest.setdefault("artifacts", {})[filename] = hashlib.sha256(
-            path.read_bytes()
-        ).hexdigest()
-    (result.output_dir / "manifest.json").write_text(
-        json.dumps(result.manifest, indent=2), encoding="utf-8"
     )
+    register_artifacts(
+        result.manifest,
+        result.output_dir,
+        (result.output_dir / filename for filename in filenames),
+    )
+    write_manifest(result.output_dir, result.manifest)

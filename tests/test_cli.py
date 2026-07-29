@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from aerospace_workbench.cli import SimulationProgressReporter, main
+from aerospace_workbench.application.cli import SimulationProgressReporter, main
 from aerospace_workbench.configuration.scenarios import default_scenario
 
 
@@ -139,11 +139,11 @@ class CliProgressTests(unittest.TestCase):
 
         with (
             patch(
-                "aerospace_workbench.cli.load_scenario",
+                "aerospace_workbench.application.cli.load_scenario",
                 return_value=default_scenario(),
             ),
             patch(
-                "aerospace_workbench.cli.run_simulation",
+                "aerospace_workbench.application.cli.run_simulation",
                 side_effect=run_simulation,
             ) as run,
             patch("sys.stdout", stdout),

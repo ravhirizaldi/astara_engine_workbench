@@ -2,15 +2,17 @@ import copy
 import unittest
 
 from aerospace_workbench.configuration.scenarios import (
-    LEGACY_SCHEMA_VERSION,
-    SCHEMA_VERSION,
     default_scenario,
-    evidence_documents,
     load_scenario_documents,
     resolve_mission_events,
     scenario_hash,
-    validate_scenario,
 )
+from aerospace_workbench.configuration.schemas import (
+    LEGACY_SCENARIO_SCHEMA_VERSION as LEGACY_SCHEMA_VERSION,
+    SCENARIO_SCHEMA_VERSION as SCHEMA_VERSION,
+)
+from aerospace_workbench.configuration.validation import validate_scenario
+from aerospace_workbench.configuration.vehicles import evidence_documents
 
 
 class ScenarioTests(unittest.TestCase):

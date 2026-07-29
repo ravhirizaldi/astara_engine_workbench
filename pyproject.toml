@@ -15,8 +15,8 @@ dependencies = [
 ]
 
 [project.scripts]
-awb = "aerospace_workbench.cli:main"
-aerospace-workbench = "aerospace_workbench.cli:main"
+awb = "aerospace_workbench.application.cli:main"
+aerospace-workbench = "aerospace_workbench.application.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
