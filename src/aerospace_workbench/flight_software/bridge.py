@@ -11,7 +11,9 @@ from ..configuration.scenarios import resolve_mission_events
 from ..configuration.schemas import SENSOR_STREAM_SCHEMA_VERSION
 from .abi import (
     FSW_ABI_VERSION,
+    FSW_BODY_CORE,
     FSW_BODY_INTEGRATED,
+    FSW_BODY_UPPER,
     FSW_COMMAND_ABORT,
     FSW_COMMAND_ARM,
     FSW_COMMAND_CLEAR_FAULTS,
@@ -308,6 +310,17 @@ def fsw_input_from_frame(
     return input_frame
 
 
+def recovery_stage_index(body_role: int) -> int:
+    try:
+        return {
+            FSW_BODY_INTEGRATED: 1,
+            FSW_BODY_CORE: 0,
+            FSW_BODY_UPPER: 1,
+        }[body_role]
+    except KeyError as error:
+        raise ValueError(f"unsupported FSW body role {body_role}") from error
+
+
 class FlightCore:
     def __init__(
         self,
@@ -353,7 +366,7 @@ class FlightCore:
                 math.radians(float(point["pitch_deg"])),
                 math.radians(float(point["azimuth_deg"])),
             )
-        recovery_stage_index = min(body_role, 1)
+        recovery_index = recovery_stage_index(body_role)
         config = FswConfig()
         config.abi_version = FSW_ABI_VERSION
         config.struct_size = ctypes.sizeof(FswConfig)
@@ -365,7 +378,7 @@ class FlightCore:
             event_times["stage2_ignition"] - event_times["stage_separation"]
         )
         config.stage2_burn_s = stages[1]["propulsion"]["burn_duration_s"]
-        config.main_deploy_altitude_m = stages[recovery_stage_index]["recovery"][
+        config.main_deploy_altitude_m = stages[recovery_index]["recovery"][
             "main_deploy_altitude_m"
         ]
         config.max_tvc_rad = math.radians(actuators["max_tvc_deg"])
@@ -377,6 +390,9 @@ class FlightCore:
                 "imu_timeout_s",
                 max(3.0 / float(sensors["imu_rate_hz"]), 0.02),
             )
+        )
+        config.magnetometer_timeout_s = float(
+            sensors["magnetometer_timeout_s"]
         )
         config.barometer_timeout_s = float(
             sensors.get(

@@ -58,10 +58,13 @@ def evidence_documents(
     if not all(key in scenario_document for key in VEHICLE_KEYS):
         return scenario_document, None
     reference = scenario_document.get("vehicle_definition", "inline_vehicle")
-    vehicle_document = {
+    source_vehicle = getattr(scenario, "vehicle_document", None)
+    vehicle_document = copy.deepcopy(source_vehicle) if source_vehicle else {
         "schema_version": VEHICLE_SCHEMA_VERSION,
         "name": Path(str(reference)).stem,
-        **{key: scenario_document.pop(key) for key in VEHICLE_KEYS},
     }
+    vehicle_document["schema_version"] = VEHICLE_SCHEMA_VERSION
+    for key in VEHICLE_KEYS:
+        vehicle_document[key] = scenario_document.pop(key)
     scenario_document["vehicle_definition"] = "vehicle_definition.json"
     return scenario_document, vehicle_document

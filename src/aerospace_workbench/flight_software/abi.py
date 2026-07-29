@@ -7,7 +7,7 @@ import ctypes
 FSW_MAX_GUIDANCE_POINTS = 32
 FSW_MAX_SENSOR_CHANNELS = 3
 FSW_FAULT_COUNT = 21
-FSW_ABI_VERSION = 0x00060000
+FSW_ABI_VERSION = 0x00070000
 FSW_BODY_INTEGRATED = 0
 FSW_BODY_CORE = 1
 FSW_BODY_UPPER = 2
@@ -44,6 +44,7 @@ class FswConfig(ctypes.Structure):
         ("control_kp", ctypes.c_double),
         ("control_kd", ctypes.c_double),
         ("imu_timeout_s", ctypes.c_double),
+        ("magnetometer_timeout_s", ctypes.c_double),
         ("barometer_timeout_s", ctypes.c_double),
         ("gnss_timeout_s", ctypes.c_double),
         ("air_data_timeout_s", ctypes.c_double),

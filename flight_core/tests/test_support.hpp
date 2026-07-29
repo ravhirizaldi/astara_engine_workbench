@@ -37,6 +37,7 @@ FswConfig default_config() {
     config.control_kp = 0.1;
     config.control_kd = 0.01;
     config.imu_timeout_s = 0.10;
+    config.magnetometer_timeout_s = 0.10;
     config.barometer_timeout_s = 0.20;
     config.gnss_timeout_s = 0.50;
     config.air_data_timeout_s = 0.05;

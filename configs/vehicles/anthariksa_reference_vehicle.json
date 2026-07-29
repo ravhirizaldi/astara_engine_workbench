@@ -229,8 +229,10 @@
   "sensors": {
     "channel_count": 3,
     "imu_rate_hz": 200.0,
+    "magnetometer_rate_hz": 200.0,
     "barometer_rate_hz": 50.0,
     "gnss_rate_hz": 10.0,
+    "magnetometer_timeout_s": 0.02,
     "barometer_timeout_s": 0.06,
     "gnss_timeout_s": 0.3,
     "altitude_filter_tau_s": 0.2,

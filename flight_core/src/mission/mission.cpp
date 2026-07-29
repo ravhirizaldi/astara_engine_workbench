@@ -295,7 +295,8 @@ void update_mode(
                 context, FSW_DISCRETE_ACTION_DEPLOY_DROGUE
             );
         }
-        context.mission.drogue_deployed = discrete_asserted(
+        context.mission.drogue_deployed =
+            context.mission.drogue_deployed || discrete_asserted(
             input.discretes.drogue_deployed,
             suite.time_s,
             context.config.discrete_feedback_timeout_s
@@ -321,7 +322,8 @@ void update_mode(
                 context, FSW_DISCRETE_ACTION_DEPLOY_MAIN
             );
         }
-        context.mission.main_deployed = discrete_asserted(
+        context.mission.main_deployed =
+            context.mission.main_deployed || discrete_asserted(
             input.discretes.main_deployed,
             suite.time_s,
             context.config.discrete_feedback_timeout_s

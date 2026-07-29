@@ -39,6 +39,9 @@ compile_commands.json
 # Generated simulation artifacts
 runs/
 output/
+!flight_core/src/output/
+!flight_core/src/output/output_builder.cpp
+!flight_core/src/output/output_builder.hpp
 *.log
 
 # Editors and operating systems

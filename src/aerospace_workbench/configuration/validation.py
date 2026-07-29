@@ -13,6 +13,17 @@ from .schemas import (
 from .scenarios import resolve_mission_events
 
 
+def _reject_nonfinite_numbers(value: Any, path: str = "scenario") -> None:
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"{path} must be finite")
+    if isinstance(value, dict):
+        for name, child in value.items():
+            _reject_nonfinite_numbers(child, f"{path}.{name}")
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            _reject_nonfinite_numbers(child, f"{path}[{index}]")
+
+
 def _positive(mapping: dict[str, Any], names: tuple[str, ...], prefix: str) -> None:
     for name in names:
         value = mapping.get(name)
@@ -101,6 +112,7 @@ def _validate_engines(stage: dict[str, Any], prefix: str) -> float:
 
 
 def validate_scenario(scenario: dict[str, Any]) -> None:
+    _reject_nonfinite_numbers(scenario)
     normalize_schema_document(scenario, SCENARIO_SCHEMA_VERSION)
     if not isinstance(scenario.get("vehicle_definition"), str) and not all(
         key in scenario for key in VEHICLE_KEYS
@@ -336,7 +348,17 @@ def validate_scenario(scenario: dict[str, Any]) -> None:
     )
 
     sensors = scenario.get("sensors", {})
-    _positive(sensors, ("imu_rate_hz", "barometer_rate_hz", "gnss_rate_hz"), "sensors")
+    _positive(
+        sensors,
+        (
+            "imu_rate_hz",
+            "magnetometer_rate_hz",
+            "magnetometer_timeout_s",
+            "barometer_rate_hz",
+            "gnss_rate_hz",
+        ),
+        "sensors",
+    )
     channel_count = sensors.get("channel_count", 1)
     if (
         not isinstance(channel_count, int)

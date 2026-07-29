@@ -19,6 +19,7 @@ bool valid_config(const FswConfig& config) {
         config.control_kp,
         config.control_kd,
         config.imu_timeout_s,
+        config.magnetometer_timeout_s,
         config.barometer_timeout_s,
         config.gnss_timeout_s,
         config.air_data_timeout_s,
@@ -88,6 +89,7 @@ bool valid_config(const FswConfig& config) {
         || config.control_kp < 0.0
         || config.control_kd < 0.0
         || config.imu_timeout_s <= 0.0
+        || config.magnetometer_timeout_s <= 0.0
         || config.barometer_timeout_s <= 0.0
         || config.gnss_timeout_s <= 0.0
         || config.air_data_timeout_s <= 0.0

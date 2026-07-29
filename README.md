@@ -55,6 +55,9 @@ pip install -r requirements.lock
 pip install -e . --no-deps
 ```
 
+ASTARA is intentionally supported as a repository-run application rather than
+a distributable wheel. See [the packaging decision](docs/PACKAGING.md).
+
 ## Run
 
 ```bash

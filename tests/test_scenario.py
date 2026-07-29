@@ -61,6 +61,15 @@ class ScenarioTests(unittest.TestCase):
             "vehicle_definition.json",
         )
         self.assertIn("vehicle", evidence_vehicle)
+        self.assertEqual(
+            evidence_vehicle["name"], "Anthariksa reference vehicle"
+        )
+        self.assertEqual(evidence_vehicle["engine_family"], "Cendrawasih")
+        metadata_changed = copy.deepcopy(resolved)
+        metadata_changed.vehicle_document["engine_family"] = "Other"
+        self.assertNotEqual(
+            scenario_hash(resolved), scenario_hash(metadata_changed)
+        )
 
     def test_default_and_legacy_repository_paths_resolve_to_configs(self) -> None:
         self.assertEqual(default_scenario_path().parent.name, "scenarios")
@@ -165,6 +174,18 @@ class ScenarioTests(unittest.TestCase):
         scenario = default_scenario()
         scenario["simulation"]["time_step_s"] = 0.0
         with self.assertRaisesRegex(ValueError, "time_step_s"):
+            validate_scenario(scenario)
+
+    def test_rejects_nan_and_infinity_anywhere_in_configuration(self) -> None:
+        for value in (float("nan"), float("inf"), -float("inf")):
+            scenario = default_scenario()
+            scenario["simulation"]["time_step_s"] = value
+            with self.assertRaisesRegex(ValueError, "must be finite"):
+                validate_scenario(scenario)
+
+        scenario = default_scenario()
+        scenario["vehicle"]["stages"][0]["inertia_kg_m2"][0] = float("nan")
+        with self.assertRaisesRegex(ValueError, "must be finite"):
             validate_scenario(scenario)
 
     def test_rejects_invalid_fsw_command_and_channel_count(self) -> None:

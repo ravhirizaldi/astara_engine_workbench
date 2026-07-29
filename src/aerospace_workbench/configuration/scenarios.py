@@ -27,12 +27,17 @@ class _LoadedScenario(dict[str, Any]):
     """Runtime scenario carrying non-serialized input provenance."""
 
     source_files: dict[str, Path]
+    vehicle_document: dict[str, Any] | None
 
     def __init__(
-        self, document: dict[str, Any], source_files: dict[str, Path]
+        self,
+        document: dict[str, Any],
+        source_files: dict[str, Path],
+        vehicle_document: dict[str, Any] | None,
     ) -> None:
         super().__init__(document)
         self.source_files = source_files
+        self.vehicle_document = copy.deepcopy(vehicle_document)
 
 
 def _repository_root() -> Path:
@@ -104,6 +109,7 @@ def load_scenario(path: str | Path | None = None) -> dict[str, Any]:
             "scenario": source,
             **({"vehicle": vehicle_path} if vehicle_path is not None else {}),
         },
+        vehicle,
     )
     merge_vehicle_definition(loaded, vehicle)
     from .validation import validate_scenario
@@ -121,7 +127,10 @@ def scenario_hash(scenario: dict[str, Any]) -> str:
     if canonical.get("vehicle_definition") and all(
         key in canonical for key in VEHICLE_KEYS
     ):
-        vehicle = {key: canonical.pop(key) for key in VEHICLE_KEYS}
+        source_vehicle = getattr(scenario, "vehicle_document", None)
+        vehicle = copy.deepcopy(source_vehicle) if source_vehicle else {}
+        for key in VEHICLE_KEYS:
+            vehicle[key] = canonical.pop(key)
         canonical.pop("vehicle_definition")
         canonical["vehicle_definition_sha256"] = hashlib.sha256(
             json.dumps(vehicle, sort_keys=True, separators=(",", ":")).encode()

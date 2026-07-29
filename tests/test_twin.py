@@ -106,6 +106,7 @@ class TwinTests(unittest.TestCase):
 
     def test_three_sensor_channels_are_independent_and_faults_hold(self) -> None:
         scenario = default_scenario()
+        scenario["sensors"]["magnetometer_rate_hz"] = 100.0
         stage = scenario["vehicle"]["stages"][0]
         launch_position = np.array([6_378_137.0, 0.0, 0.0])
         body = Body(
@@ -158,6 +159,7 @@ class TwinTests(unittest.TestCase):
         ]
         self.assertEqual(second[1].imu_sample_time_s, 0.0)
         self.assertEqual(second[0].imu_sample_time_s, 0.005)
+        self.assertEqual(second[0].magnetometer_sample_time_s, 0.0)
 
         scenario["faults"] = [
             {

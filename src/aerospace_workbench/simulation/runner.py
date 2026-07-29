@@ -195,7 +195,7 @@ def _sensor_frame(
         )
         state.magnetometer_sample_time_s = time_s
         state.next_magnetometer_sample_s = (
-            time_s + 1.0 / float(sensors["imu_rate_hz"])
+            time_s + 1.0 / float(sensors["magnetometer_rate_hz"])
         )
     if (
         not state.initialized

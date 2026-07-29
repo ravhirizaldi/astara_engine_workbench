@@ -174,6 +174,7 @@ typedef struct {
     double control_kp;
     double control_kd;
     double imu_timeout_s;
+    double magnetometer_timeout_s;
     double barometer_timeout_s;
     double gnss_timeout_s;
     double air_data_timeout_s;

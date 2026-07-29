@@ -190,10 +190,30 @@ void test_public_split_and_other_sensor_recovery() {
     fsw_destroy(handle);
 }
 
+void test_magnetometer_has_independent_timeout() {
+    auto config = default_config();
+    config.imu_timeout_s = 1.0;
+    config.magnetometer_timeout_s = 0.05;
+    fsw::internal::Context context(config);
+    auto suite = input_at(0.10).sensors;
+    suite.imus[0].sample_time_s = 0.0;
+    suite.magnetometers[0].sample_time_s = 0.0;
+
+    const auto voted = fsw::internal::vote_sensors(context, suite);
+    REQUIRE(voted.accelerometer_valid);
+    REQUIRE(voted.gyroscope_valid);
+    REQUIRE(!voted.magnetometer_valid);
+    REQUIRE(
+        context.sensors.magnetometer_health[0].flags
+        & FSW_SENSOR_HEALTH_STALE
+    );
+}
+
 int main() {
     test_one_two_and_three_channel_voting();
     test_disagreement_rejection_and_health_independence();
     test_channel_recovery_staleness_and_asynchronous_samples();
     test_public_split_and_other_sensor_recovery();
+    test_magnetometer_has_independent_timeout();
     return EXIT_SUCCESS;
 }

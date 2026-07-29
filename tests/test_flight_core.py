@@ -3,6 +3,9 @@ import unittest
 from unittest import mock
 
 from aerospace_workbench.flight_software.abi import (
+    FSW_BODY_CORE,
+    FSW_BODY_INTEGRATED,
+    FSW_BODY_UPPER,
     FSW_COMMAND_ARM,
     FSW_COMMAND_LAUNCH,
     FswOutput,
@@ -10,12 +13,20 @@ from aerospace_workbench.flight_software.abi import (
 )
 from aerospace_workbench.flight_software.bridge import (
     FlightCore,
+    recovery_stage_index,
     sensor_suite_from_frames,
 )
 from aerospace_workbench.configuration.scenarios import default_scenario
 
 
 class FlightCoreTests(unittest.TestCase):
+    def test_body_role_maps_to_surviving_recovery_stage(self) -> None:
+        self.assertEqual(recovery_stage_index(FSW_BODY_INTEGRATED), 1)
+        self.assertEqual(recovery_stage_index(FSW_BODY_CORE), 0)
+        self.assertEqual(recovery_stage_index(FSW_BODY_UPPER), 1)
+        with self.assertRaisesRegex(ValueError, "unsupported FSW body role"):
+            recovery_stage_index(99)
+
     @staticmethod
     def _frame(time_s: float) -> SensorFrame:
         frame = SensorFrame(

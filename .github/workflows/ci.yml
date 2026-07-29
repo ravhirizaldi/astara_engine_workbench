@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.lock
+      - run: python -m pip install -e . --no-deps
+      - run: python -W error::RuntimeWarning -m unittest discover -s tests -v
+
+  native:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [Debug, Release]
+    steps:
+      - uses: actions/checkout@v4
+      - run: >
+          cmake -S flight_core
+          -B flight_core/build-${{ matrix.build_type }}
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+      - run: cmake --build flight_core/build-${{ matrix.build_type }} --parallel
+      - run: >
+          ctest --test-dir flight_core/build-${{ matrix.build_type }}
+          --output-on-failure

@@ -116,9 +116,9 @@ void test_drogue_main_and_landing() {
 
     context.mission.discrete_actuation = {};
     input = input_at(0.02);
-    input.discretes.drogue_deployed.asserted = 1;
     input.discretes.main_deployed.asserted = 1;
     fsw::internal::update_mode(context, input, voted);
+    REQUIRE(context.mission.drogue_deployed);
     REQUIRE(context.mission.main_deployed);
 
     context.navigation.altitude = 1.0;
@@ -127,10 +127,10 @@ void test_drogue_main_and_landing() {
     for (int tick = 1; tick <= 4; ++tick) {
         input = input_at(0.02 + tick * 0.25);
         input.sensors.dt_s = 0.25;
-        input.discretes.drogue_deployed.asserted = 1;
-        input.discretes.main_deployed.asserted = 1;
         fsw::internal::update_mode(context, input, voted);
     }
+    REQUIRE(context.mission.drogue_deployed);
+    REQUIRE(context.mission.main_deployed);
     REQUIRE(context.mission.mode == FSW_MODE_LANDED);
 }
 

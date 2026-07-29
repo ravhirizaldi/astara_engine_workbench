@@ -15,6 +15,10 @@ set(FSW_INTERNAL_SOURCES
     src/navigation/attitude.cpp
     src/navigation/navigation.cpp
     src/output/output_builder.cpp
+    src/sensors/barometer_voting.cpp
+    src/sensors/gnss_voting.cpp
+    src/sensors/imu_voting.cpp
+    src/sensors/magnetometer_voting.cpp
     src/sensors/sensor_voting.cpp
     src/validation/config_validation.cpp
     src/validation/input_validation.cpp
