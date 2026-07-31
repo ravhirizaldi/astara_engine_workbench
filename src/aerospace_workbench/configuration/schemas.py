@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 SCENARIO_SCHEMA_VERSION = "aerospace-workbench.scenario.v1"
-VEHICLE_SCHEMA_VERSION = "aerospace-workbench.vehicle.v1"
+VEHICLE_SCHEMA_VERSION = "aerospace-workbench.vehicle.v2"
 RUN_SCHEMA_VERSION = "aerospace-workbench.run-manifest.v1"
 SENSOR_STREAM_SCHEMA_VERSION = "aerospace-workbench.sensor-stream.v1"
 CREDIBILITY_SCHEMA_VERSION = "aerospace-workbench.credibility.v2"

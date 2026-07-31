@@ -31,6 +31,15 @@ def _positive(mapping: dict[str, Any], names: tuple[str, ...], prefix: str) -> N
             raise ValueError(f"{prefix}.{name} must be positive")
 
 
+def _nonnegative(
+    mapping: dict[str, Any], names: tuple[str, ...], prefix: str
+) -> None:
+    for name in names:
+        value = mapping.get(name)
+        if not isinstance(value, (int, float)) or value < 0:
+            raise ValueError(f"{prefix}.{name} must be nonnegative")
+
+
 def _validate_table(
     table: Any,
     independent: str,
@@ -418,9 +427,42 @@ def validate_scenario(scenario: dict[str, Any]) -> None:
             "max_rate_deg_s",
             "tvc_kp",
             "tvc_kd",
+            "response_frequency_hz",
+            "damping_ratio",
+            "supply_voltage_v",
+            "max_current_a",
+            "max_power_w",
         ),
         "actuators",
     )
+    _nonnegative(
+        actuators,
+        (
+            "command_delay_s",
+            "deadband_deg",
+            "backlash_deg",
+            "feedback_quantization_deg",
+            "idle_current_a",
+            "current_per_rad_s_a",
+        ),
+        "actuators",
+    )
+    response_order = actuators.get("response_order")
+    if (
+        not isinstance(response_order, int)
+        or isinstance(response_order, bool)
+        or response_order not in (1, 2)
+    ):
+        raise ValueError("actuators.response_order must be 1 or 2")
+    available_current_a = min(
+        float(actuators["max_current_a"]),
+        float(actuators["max_power_w"])
+        / float(actuators["supply_voltage_v"]),
+    )
+    if float(actuators["idle_current_a"]) > available_current_a:
+        raise ValueError(
+            "actuators.idle_current_a cannot exceed the current/power limit"
+        )
 
     sensors = scenario.get("sensors", {})
     _positive(

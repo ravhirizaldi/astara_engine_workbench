@@ -496,6 +496,20 @@ class TwinTests(unittest.TestCase):
 
     def test_actuator_commands_are_rate_limited(self) -> None:
         scenario = default_scenario()
+        scenario["actuators"].update(
+            {
+                "command_delay_s": 0.0,
+                "response_order": 1,
+                "response_frequency_hz": 1_000.0,
+                "deadband_deg": 0.0,
+                "backlash_deg": 0.0,
+                "feedback_quantization_deg": 0.0,
+                "max_current_a": 1_000.0,
+                "max_power_w": 1_000_000.0,
+                "idle_current_a": 0.0,
+                "current_per_rad_s_a": 0.0,
+            }
+        )
         stage = scenario["vehicle"]["stages"][0]
         body = Body(
             name="integrated_stack",
@@ -521,6 +535,126 @@ class TwinTests(unittest.TestCase):
 
         np.testing.assert_allclose(first, [max_delta, -max_delta])
         np.testing.assert_allclose(second, [2.0 * max_delta, -2.0 * max_delta])
+
+    def test_actuator_delay_response_feedback_and_power_limit(self) -> None:
+        scenario = default_scenario()
+        scenario["actuators"].update(
+            {
+                "command_delay_s": 0.01,
+                "response_order": 1,
+                "response_frequency_hz": 50.0,
+                "deadband_deg": 0.0,
+                "backlash_deg": 0.0,
+                "feedback_quantization_deg": 0.01,
+                "supply_voltage_v": 10.0,
+                "max_current_a": 0.2,
+                "max_power_w": 2.0,
+                "idle_current_a": 0.1,
+                "current_per_rad_s_a": 1.0,
+            }
+        )
+        stage = scenario["vehicle"]["stages"][0]
+        body = Body(
+            name="integrated_stack",
+            stage_index=0,
+            stage=stage,
+            position_ecef_m=np.zeros(3),
+            velocity_ecef_m_s=np.zeros(3),
+            attitude_wxyz=np.array([1.0, 0.0, 0.0, 0.0]),
+            body_rates_rad_s=np.zeros(3),
+            fuel_kg=stage["fuel_mass_kg"],
+            oxidizer_kg=stage["oxidizer_mass_kg"],
+        )
+        output = FswOutput()
+        output.tvc_pitch_rad = math.radians(5.0)
+
+        first, _ = actuator_commands(output, scenario, body, 0.0, 0.005)
+        second, _ = actuator_commands(output, scenario, body, 0.005, 0.005)
+        delayed, _ = actuator_commands(output, scenario, body, 0.01, 0.005)
+
+        np.testing.assert_array_equal(first, np.zeros(2))
+        np.testing.assert_array_equal(second, np.zeros(2))
+        self.assertGreater(delayed[0], 0.0)
+        self.assertLess(
+            delayed[0],
+            math.radians(scenario["actuators"]["max_rate_deg_s"]) * 0.005,
+        )
+        self.assertAlmostEqual(body.tvc_actuator.current_a, 0.2)
+        self.assertAlmostEqual(body.tvc_actuator.power_w, 2.0)
+        feedback_deg = math.degrees(body.tvc_actuator.feedback_rad[0])
+        self.assertAlmostEqual(feedback_deg / 0.01, round(feedback_deg / 0.01))
+
+        scenario["faults"] = [
+            {
+                "body": "integrated_stack",
+                "component": "tvc",
+                "type": "loss_of_power",
+                "start_s": 0.015,
+                "duration_s": 0.005,
+            }
+        ]
+        before_fault = body.last_tvc_rad.copy()
+        held, _ = actuator_commands(output, scenario, body, 0.015, 0.005)
+        np.testing.assert_array_equal(held, before_fault)
+        self.assertEqual(body.tvc_actuator.current_a, 0.0)
+
+        scenario["faults"] = []
+        scenario["actuators"].update(
+            {
+                "command_delay_s": 0.0,
+                "response_order": 2,
+                "max_current_a": 100.0,
+                "max_power_w": 10_000.0,
+            }
+        )
+        recovered, _ = actuator_commands(output, scenario, body, 0.025, 0.005)
+        self.assertGreater(recovered[0], held[0])
+        self.assertGreater(body.tvc_actuator.velocity_rad_s[0], 0.0)
+
+    def test_actuator_deadband_and_backlash(self) -> None:
+        scenario = default_scenario()
+        scenario["actuators"].update(
+            {
+                "command_delay_s": 0.0,
+                "response_order": 1,
+                "response_frequency_hz": 50.0,
+                "deadband_deg": 0.5,
+                "backlash_deg": 1.0,
+                "max_current_a": 100.0,
+                "max_power_w": 10_000.0,
+                "idle_current_a": 0.0,
+                "current_per_rad_s_a": 0.0,
+            }
+        )
+        stage = scenario["vehicle"]["stages"][0]
+        body = Body(
+            name="integrated_stack",
+            stage_index=0,
+            stage=stage,
+            position_ecef_m=np.zeros(3),
+            velocity_ecef_m_s=np.zeros(3),
+            attitude_wxyz=np.array([1.0, 0.0, 0.0, 0.0]),
+            body_rates_rad_s=np.zeros(3),
+            fuel_kg=stage["fuel_mass_kg"],
+            oxidizer_kg=stage["oxidizer_mass_kg"],
+        )
+        output = FswOutput()
+        output.tvc_pitch_rad = math.radians(1.2)
+
+        within_slack, _ = actuator_commands(
+            output, scenario, body, 0.0, 0.005
+        )
+        np.testing.assert_array_equal(within_slack, np.zeros(2))
+
+        output.tvc_pitch_rad = math.radians(3.0)
+        beyond_slack, _ = actuator_commands(
+            output, scenario, body, 0.005, 0.005
+        )
+        self.assertGreater(beyond_slack[0], 0.0)
+        self.assertLessEqual(
+            beyond_slack[0],
+            math.radians(scenario["actuators"]["max_tvc_deg"]),
+        )
 
     def test_multi_engine_telemetry_and_engine_cutoff(self) -> None:
         scenario = default_scenario()

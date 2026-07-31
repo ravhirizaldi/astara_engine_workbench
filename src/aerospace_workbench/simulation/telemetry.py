@@ -109,9 +109,28 @@ def _telemetry_row(
         "fsw_inhibit_flags": int(output.inhibit_flags),
         "tvc_pitch_deg": math.degrees(body.last_tvc_rad[0]),
         "tvc_yaw_deg": math.degrees(body.last_tvc_rad[1]),
+        "tvc_feedback_pitch_deg": math.degrees(
+            body.tvc_actuator.feedback_rad[0]
+        ),
+        "tvc_feedback_yaw_deg": math.degrees(
+            body.tvc_actuator.feedback_rad[1]
+        ),
+        "tvc_current_a": body.tvc_actuator.current_a,
+        "tvc_power_w": body.tvc_actuator.power_w,
         "fin_roll_deg": math.degrees(body.last_fin_rad[0]),
         "fin_pitch_deg": math.degrees(body.last_fin_rad[1]),
         "fin_yaw_deg": math.degrees(body.last_fin_rad[2]),
+        "fin_feedback_roll_deg": math.degrees(
+            body.fin_actuator.feedback_rad[0]
+        ),
+        "fin_feedback_pitch_deg": math.degrees(
+            body.fin_actuator.feedback_rad[1]
+        ),
+        "fin_feedback_yaw_deg": math.degrees(
+            body.fin_actuator.feedback_rad[2]
+        ),
+        "fin_current_a": body.fin_actuator.current_a,
+        "fin_power_w": body.fin_actuator.power_w,
         "drogue_deployed": int(body.drogue_deployed),
         "main_deployed": int(body.main_deployed),
         "landed": int(body.landed),

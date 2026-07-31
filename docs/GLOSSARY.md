@@ -29,7 +29,7 @@ run artifacts, and architecture documents.
 | **ABI** | Application Binary Interface | The exact binary layout and calling contract between Python and the compiled C++ Flight Core. ASTARA exposes versioned `FswConfig`, `FswInput`, `FswOutput`, and `fsw_*` symbols. |
 | **C ABI** | C-compatible binary interface | The stable interface loaded by Python through `ctypes`, even though Flight Core is implemented in C++. |
 | **FFI** | Foreign Function Interface | A mechanism for one programming language to call another. Python-to-C++ calls through the C ABI are an FFI boundary. |
-| **Schema** | Machine-readable data structure contract | Scenario, vehicle, and run artifacts carry explicit schema versions such as `aerospace-workbench.scenario.v1` and `aerospace-workbench.vehicle.v1`. |
+| **Schema** | Machine-readable data structure contract | Scenario, vehicle, and run artifacts carry explicit schema versions such as `aerospace-workbench.scenario.v1` and `aerospace-workbench.vehicle.v2`. |
 | **Typed input/output** | Fields with explicit meaning, units, and structure | Flight Core receives structured sensor, command, propulsion, recovery, air-data, and timing fields instead of an unstructured dictionary or byte stream. |
 | **Replay** | Re-execution from recorded inputs | `awb replay` sends a recorded sensor and command stream through the same Flight Core without rerunning vehicle truth dynamics. |
 | **Artifact** | Persisted output from a run | Examples include `truth.csv`, `sensors.csv.gz`, `commands.csv`, `fsw.csv`, `events.csv`, and `manifest.json`. |

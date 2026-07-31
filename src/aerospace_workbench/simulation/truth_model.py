@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 
+from .actuators import ActuatorState
 from .sensors import SensorChannelState
 
 
@@ -82,14 +83,34 @@ class Body:
     aero_valid: bool = True
     sensor_channels: list[SensorChannelState] = field(default_factory=list)
     last_discrete_actuation_sequence: int = 0
-    last_tvc_rad: np.ndarray = field(default_factory=lambda: np.zeros(2))
-    last_fin_rad: np.ndarray = field(default_factory=lambda: np.zeros(3))
+    tvc_actuator: ActuatorState = field(
+        default_factory=lambda: ActuatorState.zeroed(2)
+    )
+    fin_actuator: ActuatorState = field(
+        default_factory=lambda: ActuatorState.zeroed(3)
+    )
     last_engine_thrusts_n: dict[str, float] = field(default_factory=dict)
     last_chamber_pressure_pa: float = 0.0
     last_engine_temperature_k: float = 293.15
     last_engine_rpm: float = 0.0
     hold_down_released_s: float | None = None
     rail_exit_s: float | None = None
+
+    @property
+    def last_tvc_rad(self) -> np.ndarray:
+        return self.tvc_actuator.position_rad
+
+    @last_tvc_rad.setter
+    def last_tvc_rad(self, value: np.ndarray) -> None:
+        self.tvc_actuator.position_rad = np.asarray(value, dtype=float).copy()
+
+    @property
+    def last_fin_rad(self) -> np.ndarray:
+        return self.fin_actuator.position_rad
+
+    @last_fin_rad.setter
+    def last_fin_rad(self, value: np.ndarray) -> None:
+        self.fin_actuator.position_rad = np.asarray(value, dtype=float).copy()
 
     @property
     def mass_kg(self) -> float:

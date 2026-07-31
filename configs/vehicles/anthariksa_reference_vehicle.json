@@ -1,5 +1,5 @@
 {
-  "schema_version": "aerospace-workbench.vehicle.v1",
+  "schema_version": "aerospace-workbench.vehicle.v2",
   "name": "Anthariksa reference vehicle",
   "engine_family": "Cendrawasih",
   "vehicle": {
@@ -438,6 +438,18 @@
     "max_fin_deg": 14.0,
     "max_rate_deg_s": 360.0,
     "tvc_kp": 0.75,
-    "tvc_kd": 0.18
+    "tvc_kd": 0.18,
+    "command_delay_s": 0.01,
+    "response_order": 2,
+    "response_frequency_hz": 15.0,
+    "damping_ratio": 0.8,
+    "deadband_deg": 0.02,
+    "backlash_deg": 0.03,
+    "feedback_quantization_deg": 0.01,
+    "supply_voltage_v": 28.0,
+    "max_current_a": 10.0,
+    "max_power_w": 250.0,
+    "idle_current_a": 0.2,
+    "current_per_rad_s_a": 1.0
   }
 }

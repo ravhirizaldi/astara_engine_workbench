@@ -8,6 +8,7 @@ hardware or authorize flight.
 | AST-SIM-001 | Identical scenario, source, and seed shall produce identical numerical telemetry. | `tests.test_twin.TwinTests.test_short_two_stage_run_is_finite_and_reproducible` |
 | AST-SIM-002 | Stage separation shall apply equal and opposite configured impulse, preserve mass and linear/angular momentum, and account for the resulting kinetic-energy increase. | `tests.test_twin.TwinTests.test_separation_conserves_mass_and_momentum` |
 | AST-SIM-003 | The launch rail shall use scenario-defined hold-down release, friction, rail-button constraints, and a one-shot rail-exit event. | `tests.test_twin.TwinTests.test_launch_rail_releases_and_emits_exit_once` |
+| AST-SIM-004 | Continuous actuators shall model configured command delay, first- or second-order response, rate and position limits, deadband, backlash, position feedback, current/power limits, and fault modes. | `tests.test_twin.TwinTests.test_actuator_delay_response_feedback_and_power_limit` |
 | AST-ARC-001 | Truth, sensor readings, and flight-software estimates shall remain distinct data products. | `truth.csv`, `sensors.csv.gz`, `fsw.csv` plus `tests.test_twin` |
 | AST-FSW-001 | Flight core shall consume only the versioned `FswInput` C ABI; it shall not access simulator state or hardware. | C ABI review and `tests.test_flight_core` |
 | AST-FSW-002 | Flight core shall use explicit time input and perform no dynamic allocation after initialization. | C++ review and `flight_core/tests/unit/` |

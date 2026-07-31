@@ -91,6 +91,8 @@ class ScenarioTests(unittest.TestCase):
             ("simulation", "output_rate_hz", 201.0, "output_rate_hz"),
             ("actuators", "tvc_kp", 0.0, "tvc_kp"),
             ("actuators", "tvc_kd", 0.0, "tvc_kd"),
+            ("actuators", "command_delay_s", -0.1, "command_delay_s"),
+            ("actuators", "max_power_w", 0.0, "max_power_w"),
             ("environment", "wind_ned_m_s", [0.0, 0.0], "wind_ned_m_s"),
             (
                 "environment",
@@ -105,6 +107,11 @@ class ScenarioTests(unittest.TestCase):
                 scenario[section][name] = value
                 with self.assertRaisesRegex(ValueError, message):
                     validate_scenario(scenario)
+
+        scenario = default_scenario()
+        scenario["actuators"]["response_order"] = 3
+        with self.assertRaisesRegex(ValueError, "response_order"):
+            validate_scenario(scenario)
 
     def test_rejects_nan_and_infinity_anywhere_in_configuration(self) -> None:
         for value in (float("nan"), float("inf"), -float("inf")):

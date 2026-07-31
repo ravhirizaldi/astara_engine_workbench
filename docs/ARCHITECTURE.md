@@ -111,6 +111,9 @@ and stage-two burn begins at its ignition confirmation. Separation, drogue,
 and main outputs are fixed-size one-shot commands with monotonically increasing
 sequence identities. The actuator emulator consumes each identity once while
 Flight Core continues waiting for timestamped confirmation after the pulse.
+Continuous TVC and movable-fin commands pass through deterministic delay,
+first- or second-order response, rate/position/deadband/backlash constraints,
+quantized feedback, a lumped current/power budget, and configured fault modes.
 
 The replayable sensor contract is the migration boundary. A future transport
 may move Flight Core into another process without changing mission logic or

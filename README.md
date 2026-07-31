@@ -101,7 +101,7 @@ It references
 | Document | Owns | Required schema |
 |---|---|---|
 | Scenario | Simulation rate and seed, launch environment, mission events, commands, guidance, faults, uncertainty, and analysis settings | `aerospace-workbench.scenario.v1` |
-| Vehicle | Stage geometry and mass, propulsion, aerodynamics, recovery, sensor models, and actuators | `aerospace-workbench.vehicle.v1` |
+| Vehicle | Stage geometry and mass, propulsion, aerodynamics, recovery, sensor models, and actuators | `aerospace-workbench.vehicle.v2` |
 
 All quantities use SI units unless the field name explicitly says otherwise.
 Missing or mismatched schema identifiers are rejected. Scenario files must use
