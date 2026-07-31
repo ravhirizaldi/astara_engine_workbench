@@ -1,14 +1,16 @@
 # ASTARA Scenario Catalog
 
-| ID | Scenario | Evidence |
-|---|---|---|
-| AST-SCN-001 | Nominal Anthariksa reference mission | `configs/scenarios/anthariksa_reference_mission.json` and `tests.test_twin` |
-| AST-SCN-002 | Upper-stage GNSS dropout | `tests.test_twin.TwinTests.test_short_two_stage_run_is_finite_and_reproducible` |
-| AST-SCN-003 | Symmetric multi-engine cutoff | `tests.test_twin.TwinTests.test_multi_engine_telemetry_and_engine_cutoff` |
-| AST-SCN-004 | Operator cancellation | `tests.test_twin.TwinTests.test_stream_can_cancel_without_waiting_for_batch_result` |
-| AST-SCN-005 | Recorded sensor replay | `tests.test_replay.ReplayTests.test_sensor_log_replays_deterministically` |
-| AST-SCN-006 | GNSS dropout and degraded navigation | `tests.test_twin.TwinTests.test_short_two_stage_run_is_finite_and_reproducible` |
-| AST-SCN-007 | Upper-stage estimator continuity at separation | `tests.test_twin.TwinTests.test_short_two_stage_run_is_finite_and_reproducible` |
+| ID | Scenario file | Injected condition | Expected evidence |
+|---|---|---|---|
+| AST-SCN-001 | `anthariksa_reference_mission.json` | None | Nominal software reference |
+| AST-SCN-002 | `anthariksa_gnss_dropout.json` | All upper-stage GNSS channels drop out from T+10 s through T+40 s | GNSS unusable masks and degraded navigation |
+| AST-SCN-003 | `anthariksa_imu_disagreement.json` | IMU channel 2 receives a large bias from T+1 s through T+7 s | Channel disagreement and rejection while healthy channels remain |
+| AST-SCN-004 | `anthariksa_upper_engine_cutoff.json` | Upper-stage engine is cut off from scheduled ignition through burnout | Zero upper-stage thrust and off-nominal trajectory |
 
-Fault variants remain code-generated until a scenario requires independent
-configuration ownership. This avoids duplicated JSON while the schema evolves.
+All files are independent variants of the nominal mission and reference the
+same vehicle definition. Run one with:
+
+```bash
+awb validate configs/scenarios/anthariksa_gnss_dropout.json
+awb simulate configs/scenarios/anthariksa_gnss_dropout.json --no-report
+```

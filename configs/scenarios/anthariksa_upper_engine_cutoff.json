@@ -1,0 +1,113 @@
+{
+  "schema_version": "aerospace-workbench.scenario.v1",
+  "name": "Anthariksa upper-stage engine cutoff",
+  "vehicle_definition": "../vehicles/anthariksa_reference_vehicle.json",
+  "simulation": {
+    "time_step_s": 0.005,
+    "max_time_s": 900.0,
+    "output_rate_hz": 10.0,
+    "seed": 1
+  },
+  "monte_carlo": {
+    "samples": 20,
+    "seed": 1,
+    "telemetry_sample_percent": 2.0
+  },
+  "environment": {
+    "latitude_deg": -6.2,
+    "longitude_deg": 106.8,
+    "launch_altitude_m": 50.0,
+    "launch_azimuth_deg": 90.0,
+    "wind_ned_m_s": [2.0, 4.0, 0.0]
+  },
+  "mission": {
+    "events": [
+      {
+        "event": "stage_separation",
+        "trigger": "burnout_stage_1",
+        "delay": 0.5
+      },
+      {
+        "event": "stage2_ignition",
+        "trigger": "stage_separation",
+        "delay": 1.0
+      }
+    ],
+    "separation_impulse_m_s": 0.8,
+    "commands": [
+      {"time_s": 0.0, "command": "ARM"},
+      {"time_s": 0.005, "command": "LAUNCH"}
+    ],
+    "attitude_schedule": [
+      {"time_s": 0.0, "pitch_deg": 0.0, "azimuth_deg": 90.0},
+      {"time_s": 4.0, "pitch_deg": 4.0, "azimuth_deg": 90.0},
+      {"time_s": 12.0, "pitch_deg": 12.0, "azimuth_deg": 90.0},
+      {"time_s": 25.0, "pitch_deg": 18.0, "azimuth_deg": 90.0}
+    ]
+  },
+  "faults": [
+    {
+      "body": "upper_stage",
+      "component": "engine",
+      "engine_id": "cendrawasih-upper-01",
+      "type": "cutoff",
+      "start_s": 9.5,
+      "duration_s": 10.0
+    }
+  ],
+  "uncertainty": {
+    "basis": "Provisional one-sigma assumptions; replace with measured dispersions.",
+    "thrust_scale_1sigma": 0.08,
+    "drag_scale_1sigma": 0.12,
+    "dry_mass_scale_1sigma": 0.02,
+    "wind_1sigma_m_s": 2.0,
+    "timing_1sigma_s": 0.05
+  },
+  "reference_backends": {
+    "rocketpy": {
+      "enabled": true
+    }
+  },
+  "validation_limits": {
+    "max_mach": 5.0,
+    "max_angle_of_attack_deg": 20.0,
+    "max_altitude_m": 100000.0
+  },
+  "credibility": {
+    "status": "PRELIMINARY_UNVALIDATED",
+    "intended_use": "Software integration, sensitivity studies, and planning test campaigns.",
+    "prohibited_use": [
+      "flight safety decisions",
+      "hardware qualification",
+      "range safety approval",
+      "certification"
+    ],
+    "acceptance_criteria": {
+      "timestep_max_relative_change": 0.01,
+      "convergence_horizon_s": 60.0
+    },
+    "validation_evidence": [],
+    "model_sources": {
+      "propulsion": {
+        "status": "PROVISIONAL",
+        "source": "Internal reduced-order estimate represented as a replaceable performance table.",
+        "replace_with": "Calibrated static-fire thrust, pressure, temperature, and mass-flow data."
+      },
+      "aerodynamics": {
+        "status": "PROVISIONAL",
+        "source": "Internal preliminary coefficient table.",
+        "replace_with": "Reviewed CFD, wind-tunnel, or independently validated coefficient data."
+      },
+      "mass_properties": {
+        "status": "PROVISIONAL",
+        "source": "Internal propellant-fraction estimate.",
+        "replace_with": "Measured component masses and reviewed CG/inertia analysis."
+      },
+      "environment": {
+        "status": "REFERENCE",
+        "source": "Layered ISA atmosphere with a constant scenario wind vector.",
+        "replace_with": "Launch-site atmospheric and wind profile for each campaign."
+      }
+    }
+  }
+}

@@ -4,6 +4,7 @@ import unittest
 from aerospace_workbench.configuration.scenarios import (
     default_scenario_path,
     default_scenario,
+    load_scenario,
     load_scenario_documents,
     resolve_mission_events,
     scenario_hash,
@@ -16,6 +17,13 @@ from aerospace_workbench.configuration.vehicles import evidence_documents
 
 
 class ScenarioTests(unittest.TestCase):
+    def test_all_catalog_scenarios_are_valid(self) -> None:
+        paths = sorted(default_scenario_path().parent.glob("*.json"))
+        self.assertGreater(len(paths), 1)
+        for path in paths:
+            with self.subTest(path=path.name):
+                validate_scenario(load_scenario(path))
+
     def test_default_scenario_is_valid_and_stable(self) -> None:
         scenario = default_scenario()
         validate_scenario(scenario)
