@@ -30,6 +30,7 @@ from aerospace_workbench.mathematics.quaternions import (
 from aerospace_workbench.simulation.actuators import actuator_commands
 from aerospace_workbench.simulation.propulsion import propulsion_step
 from aerospace_workbench.simulation.runner import (
+    AVIONICS_CSV_FIELDS,
     _derivative,
     _sensor_frame,
     run_simulation,
@@ -39,6 +40,59 @@ from aerospace_workbench.simulation.truth_model import Body
 
 
 class TwinTests(unittest.TestCase):
+    def test_avionics_timeline_is_delayed_and_seeded(self) -> None:
+        scenario = default_scenario()
+        scenario["simulation"].update(
+            {"max_time_s": 0.03, "output_rate_hz": 200.0}
+        )
+        gnss_timing = scenario["avionics"]["devices"]["gnss"]
+        gnss_timing.update(
+            {
+                "clock_offset_s": 0.001,
+                "drift_ppm": 20.0,
+                "jitter_s": 0.0001,
+                "phase_offset_s": 0.002,
+            }
+        )
+
+        first = run_simulation(
+            scenario, seed=9, create_report=False, persist=False
+        )
+        second = run_simulation(
+            scenario, seed=9, create_report=False, persist=False
+        )
+
+        self.assertEqual(first.avionics_timeline, second.avionics_timeline)
+        gnss = next(
+            row
+            for row in first.avionics_timeline
+            if row["subsystem"] == "gnss"
+        )
+        self.assertEqual(set(gnss), set(AVIONICS_CSV_FIELDS))
+        self.assertLess(
+            gnss["sensor_sample_time_s"],
+            gnss["sensor_completion_time_s"],
+        )
+        self.assertLess(
+            gnss["sensor_completion_time_s"],
+            gnss["bus_publish_time_s"],
+        )
+        self.assertLess(
+            gnss["bus_publish_time_s"],
+            gnss["fsw_receive_time_s"],
+        )
+
+        gnss_timing["deadline_s"] = 0.001
+        dropped = run_simulation(
+            scenario, seed=9, create_report=False, persist=False
+        )
+        self.assertGreater(
+            dropped.manifest["avionics_timing"]["dropped_deadlines"][
+                "devices"
+            ]["gnss"],
+            0,
+        )
+
     def test_core_estimator_attitude_is_continuous_at_separation(self) -> None:
         scenario = default_scenario()
         scenario["simulation"].update(
@@ -476,8 +530,11 @@ class TwinTests(unittest.TestCase):
             set(FSW_SENSOR_DIAGNOSTIC_FIELDS)
             <= deterministic.fsw_telemetry[0].keys()
         )
-        self.assertGreater(
-            deterministic.fsw_telemetry[0]["accelerometer_usable_mask"], 0
+        self.assertTrue(
+            any(
+                row["accelerometer_usable_mask"] > 0
+                for row in deterministic.fsw_telemetry
+            )
         )
         self.assertTrue(
             any(
@@ -485,12 +542,11 @@ class TwinTests(unittest.TestCase):
                 for row in measured.fsw_telemetry
             )
         )
-        self.assertTrue(
-            all(
-                row["previous_execution_time_s"] == 0.02
-                for row in injected.fsw_telemetry
-            )
-        )
+        injected_execution_times = {
+            row["previous_execution_time_s"]
+            for row in injected.fsw_telemetry
+        }
+        self.assertEqual(injected_execution_times, {0.0, 0.02})
         self.assertGreater(
             max(row["consecutive_overruns"] for row in injected.fsw_telemetry),
             0,
@@ -499,6 +555,7 @@ class TwinTests(unittest.TestCase):
             all(
                 "DEADLINE_OVERRUN" in row["faults"]
                 for row in injected.fsw_telemetry
+                if row["previous_execution_time_s"] == 0.02
             )
         )
         with self.assertRaisesRegex(ValueError, "requires"):
@@ -611,6 +668,7 @@ class TwinTests(unittest.TestCase):
             sensor_path = Path(first.output_dir) / "sensors.csv.gz"
             self.assertTrue(sensor_path.exists())
             self.assertIn("sensors.csv.gz", first.manifest["artifacts"])
+            self.assertIn("avionics.csv", first.manifest["artifacts"])
             command_path = Path(first.output_dir) / "commands.csv"
             self.assertTrue(command_path.exists())
             self.assertIn("commands.csv", first.manifest["artifacts"])

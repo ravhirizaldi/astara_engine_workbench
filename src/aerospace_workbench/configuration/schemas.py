@@ -11,7 +11,7 @@ SENSOR_STREAM_SCHEMA_VERSION = "aerospace-workbench.sensor-stream.v1"
 CREDIBILITY_SCHEMA_VERSION = "aerospace-workbench.credibility.v2"
 ROCKETPY_REFERENCE_SCHEMA_VERSION = "aerospace-workbench.rocketpy-reference.v1"
 
-VEHICLE_KEYS = ("vehicle", "sensors", "actuators")
+VEHICLE_KEYS = ("vehicle", "sensors", "avionics", "actuators")
 
 
 def require_schema_version(

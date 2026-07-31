@@ -37,7 +37,6 @@ class Body:
     last_angle_of_attack_deg: float = 0.0
     aero_valid: bool = True
     sensor_channels: list[SensorChannelState] = field(default_factory=list)
-    next_fsw_sample_s: float = 0.0
     last_discrete_actuation_sequence: int = 0
     last_tvc_rad: np.ndarray = field(default_factory=lambda: np.zeros(2))
     last_fin_rad: np.ndarray = field(default_factory=lambda: np.zeros(3))

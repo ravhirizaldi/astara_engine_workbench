@@ -425,6 +425,74 @@ def validate_scenario(scenario: dict[str, Any]) -> None:
             f"({fsw_step_s:g} s)"
         )
 
+    avionics = scenario.get("avionics", {})
+    expected_subsystems = {
+        "devices": ("imu", "magnetometer", "barometer", "gnss"),
+        "tasks": ("fsw",),
+        "buses": ("sensor_bus",),
+    }
+    timing_fields = {
+        "sample_rate_hz",
+        "clock_offset_s",
+        "drift_ppm",
+        "jitter_s",
+        "processing_delay_s",
+        "publication_delay_s",
+        "deadline_s",
+        "drop_on_deadline_miss",
+        "phase_offset_s",
+        "reset_epoch_s",
+    }
+    for group, names in expected_subsystems.items():
+        profiles = avionics.get(group)
+        if not isinstance(profiles, dict):
+            raise ValueError(f"avionics.{group} must be an object")
+        for name in names:
+            profile = profiles.get(name)
+            prefix = f"avionics.{group}.{name}"
+            if not isinstance(profile, dict):
+                raise ValueError(f"{prefix} must be an object")
+            missing = timing_fields - profile.keys()
+            if missing:
+                raise ValueError(
+                    f"{prefix} is missing {', '.join(sorted(missing))}"
+                )
+            for field in timing_fields - {"drop_on_deadline_miss"}:
+                value = profile[field]
+                if not isinstance(value, (int, float)) or isinstance(value, bool):
+                    raise ValueError(f"{prefix}.{field} must be numeric")
+            for field in (
+                "sample_rate_hz",
+                "deadline_s",
+            ):
+                if float(profile[field]) <= 0.0:
+                    raise ValueError(f"{prefix}.{field} must be positive")
+            for field in (
+                "jitter_s",
+                "processing_delay_s",
+                "publication_delay_s",
+            ):
+                if float(profile[field]) < 0.0:
+                    raise ValueError(f"{prefix}.{field} must be nonnegative")
+            if not isinstance(profile["drop_on_deadline_miss"], bool):
+                raise ValueError(
+                    f"{prefix}.drop_on_deadline_miss must be boolean"
+                )
+    for device, rate_name in (
+        ("imu", "imu_rate_hz"),
+        ("magnetometer", "magnetometer_rate_hz"),
+        ("barometer", "barometer_rate_hz"),
+        ("gnss", "gnss_rate_hz"),
+    ):
+        if (
+            float(avionics["devices"][device]["sample_rate_hz"])
+            != float(sensors[rate_name])
+        ):
+            raise ValueError(
+                f"avionics.devices.{device}.sample_rate_hz must match "
+                f"sensors.{rate_name}"
+            )
+
     uncertainty = scenario.get("uncertainty", {})
     for name, value in uncertainty.items():
         if name == "basis":

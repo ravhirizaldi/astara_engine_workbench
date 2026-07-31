@@ -247,6 +247,86 @@
     "dynamic_pressure_noise_pa": 30.0,
     "engine_health_noise_percent": 0.25
   },
+  "avionics": {
+    "devices": {
+      "imu": {
+        "sample_rate_hz": 200.0,
+        "clock_offset_s": 0.0,
+        "drift_ppm": 0.0,
+        "jitter_s": 0.0,
+        "processing_delay_s": 0.0002,
+        "publication_delay_s": 0.0001,
+        "deadline_s": 0.005,
+        "drop_on_deadline_miss": true,
+        "phase_offset_s": 0.0,
+        "reset_epoch_s": 0.0
+      },
+      "magnetometer": {
+        "sample_rate_hz": 200.0,
+        "clock_offset_s": 0.0,
+        "drift_ppm": 0.0,
+        "jitter_s": 0.0,
+        "processing_delay_s": 0.0004,
+        "publication_delay_s": 0.0001,
+        "deadline_s": 0.005,
+        "drop_on_deadline_miss": true,
+        "phase_offset_s": 0.0,
+        "reset_epoch_s": 0.0
+      },
+      "barometer": {
+        "sample_rate_hz": 50.0,
+        "clock_offset_s": 0.0,
+        "drift_ppm": 0.0,
+        "jitter_s": 0.0,
+        "processing_delay_s": 0.001,
+        "publication_delay_s": 0.0002,
+        "deadline_s": 0.02,
+        "drop_on_deadline_miss": true,
+        "phase_offset_s": 0.0,
+        "reset_epoch_s": 0.0
+      },
+      "gnss": {
+        "sample_rate_hz": 10.0,
+        "clock_offset_s": 0.0,
+        "drift_ppm": 0.0,
+        "jitter_s": 0.0,
+        "processing_delay_s": 0.02,
+        "publication_delay_s": 0.001,
+        "deadline_s": 0.1,
+        "drop_on_deadline_miss": true,
+        "phase_offset_s": 0.0,
+        "reset_epoch_s": 0.0
+      }
+    },
+    "tasks": {
+      "fsw": {
+        "sample_rate_hz": 200.0,
+        "clock_offset_s": 0.0,
+        "drift_ppm": 0.0,
+        "jitter_s": 0.0,
+        "processing_delay_s": 0.0008,
+        "publication_delay_s": 0.0002,
+        "deadline_s": 0.005,
+        "drop_on_deadline_miss": true,
+        "phase_offset_s": 0.005,
+        "reset_epoch_s": 0.0
+      }
+    },
+    "buses": {
+      "sensor_bus": {
+        "sample_rate_hz": 1000.0,
+        "clock_offset_s": 0.0,
+        "drift_ppm": 0.0,
+        "jitter_s": 0.0,
+        "processing_delay_s": 0.0001,
+        "publication_delay_s": 0.0001,
+        "deadline_s": 0.01,
+        "drop_on_deadline_miss": true,
+        "phase_offset_s": 0.0,
+        "reset_epoch_s": 0.0
+      }
+    }
+  },
   "actuators": {
     "max_tvc_deg": 6.0,
     "max_fin_deg": 14.0,

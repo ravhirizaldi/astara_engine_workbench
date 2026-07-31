@@ -44,9 +44,11 @@ class ScenarioTests(unittest.TestCase):
 
         self.assertNotIn("vehicle", scenario_document)
         self.assertNotIn("sensors", scenario_document)
+        self.assertNotIn("avionics", scenario_document)
         self.assertNotIn("actuators", scenario_document)
         self.assertIsNotNone(vehicle_document)
         self.assertIn("vehicle", vehicle_document)
+        self.assertIn("avionics", vehicle_document)
         self.assertTrue(vehicle_path.is_file())
 
         resolved = default_scenario()

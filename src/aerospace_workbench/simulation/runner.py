@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import copy
 import csv
 import ctypes
 import gzip
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -87,6 +88,14 @@ from .propulsion import (
     propulsion_step as _propulsion,
     stage_engines as _stage_engines,
 )
+from .scheduling import (
+    BusScheduler,
+    DeviceScheduler,
+    EventQueue,
+    SimulationClock,
+    TaskScheduler,
+    TimingProfile,
+)
 from .truth_model import Body, stage_total_mass as _stage_total_mass
 
 
@@ -97,6 +106,105 @@ class RunResult:
     telemetry: list[dict[str, Any]]
     fsw_telemetry: list[dict[str, Any]]
     events: list[dict[str, Any]]
+    avionics_timeline: list[dict[str, Any]] = field(default_factory=list)
+
+
+AVIONICS_CSV_FIELDS = (
+    "body",
+    "subsystem",
+    "truth_time_s",
+    "sensor_sample_time_s",
+    "sensor_completion_time_s",
+    "bus_publish_time_s",
+    "fsw_receive_time_s",
+)
+
+
+@dataclass
+class _AvionicsRuntime:
+    clock: SimulationClock
+    queue: EventQueue
+    devices: DeviceScheduler
+    tasks: TaskScheduler
+    bus: BusScheduler
+    received: list[dict[str, Any]]
+    timeline: list[dict[str, Any]]
+    record_timeline: bool
+    last_task_time_s: float | None = None
+
+
+def _scheduler_seed(seed: int, body_name: str, subsystem: str) -> int:
+    return seed + sum(
+        (index + 1) * ord(character)
+        for index, character in enumerate(f"{body_name}:{subsystem}")
+    )
+
+
+def _avionics_runtime(
+    scenario: dict[str, Any],
+    seed: int,
+    body_name: str,
+    start_s: float,
+    timeline: list[dict[str, Any]],
+    initial_received: list[dict[str, Any]] | None = None,
+    record_timeline: bool = True,
+) -> _AvionicsRuntime:
+    queue = EventQueue()
+    devices = DeviceScheduler(queue)
+    tasks = TaskScheduler(queue)
+    avionics = scenario["avionics"]
+    for name, values in avionics["devices"].items():
+        devices.add(
+            name,
+            TimingProfile.from_mapping(values),
+            _scheduler_seed(seed, body_name, name),
+        )
+        devices.start(name, start_s)
+    tasks.add(
+        "fsw",
+        TimingProfile.from_mapping(avionics["tasks"]["fsw"]),
+        _scheduler_seed(seed, body_name, "fsw"),
+    )
+    tasks.start("fsw", start_s)
+    return _AvionicsRuntime(
+        SimulationClock(start_s),
+        queue,
+        devices,
+        tasks,
+        BusScheduler(
+            queue,
+            "sensor_bus",
+            TimingProfile.from_mapping(avionics["buses"]["sensor_bus"]),
+            _scheduler_seed(seed, body_name, "sensor_bus"),
+        ),
+        (
+            copy.deepcopy(initial_received)
+            if initial_received is not None
+            else [
+                {}
+                for _ in range(
+                    int(scenario["sensors"].get("channel_count", 1))
+                )
+            ]
+        ),
+        timeline,
+        record_timeline,
+    )
+
+
+def _record_avionics_timeline(
+    avionics: _AvionicsRuntime,
+    payload: dict[str, Any],
+    subsystem: str,
+) -> None:
+    if avionics.record_timeline:
+        avionics.timeline.append(
+            {
+                field: payload.get(field)
+                for field in AVIONICS_CSV_FIELDS
+            }
+            | {"subsystem": subsystem}
+        )
 
 
 def _channel_state(
@@ -154,159 +262,194 @@ def _sensor_frame(
 ) -> SensorFrame:
     sensors = scenario["sensors"]
     state = _channel_state(body, sensors, rng, channel)
-    altitude = float(np.linalg.norm(body.position_ecef_m) - np.linalg.norm(launch_position))
-    up = unit(body.position_ecef_m)
-    magnetic_ecef = unit(np.array([0.28, 0.08, -0.52]))
-    previous_acceleration = state.acceleration_body_m_s2.copy()
-    previous_gyro = state.gyro_body_rad_s.copy()
-    previous_magnetic = state.magnetic_body.copy()
-    previous_barometer = np.array([state.barometric_altitude_m])
-    previous_gnss = np.concatenate(
-        (state.gnss_position_ecef_m, state.gnss_velocity_ecef_m_s)
+    schedules = (
+        ("imu", "next_imu_sample_s", "imu_rate_hz"),
+        (
+            "magnetometer",
+            "next_magnetometer_sample_s",
+            "magnetometer_rate_hz",
+        ),
+        ("barometer", "next_barometer_sample_s", "barometer_rate_hz"),
+        ("gnss", "next_gnss_sample_s", "gnss_rate_hz"),
     )
-    previous_imu_time = state.imu_sample_time_s
-    previous_magnetometer_time = state.magnetometer_sample_time_s
-    previous_barometer_time = state.barometer_sample_time_s
-    previous_gnss_time = state.gnss_sample_time_s
-    if not state.initialized or time_s + 1e-12 >= state.next_imu_sample_s:
-        state.acceleration_body_m_s2 = (
+    for device, next_field, rate_field in schedules:
+        if not state.initialized or time_s + 1e-12 >= getattr(state, next_field):
+            _sample_device(
+                body,
+                scenario,
+                rng,
+                time_s,
+                launch_position,
+                channel,
+                device,
+            )
+            setattr(
+                state,
+                next_field,
+                time_s + 1.0 / float(sensors[rate_field]),
+            )
+    state.initialized = True
+    return _frame_from_values(
+        body,
+        scenario,
+        rng,
+        time_s,
+        dt_s,
+        separated,
+        {
+            "acceleration_body_m_s2": state.acceleration_body_m_s2,
+            "gyro_body_rad_s": state.gyro_body_rad_s,
+            "magnetic_body": state.magnetic_body,
+            "barometric_altitude_m": state.barometric_altitude_m,
+            "gnss_position_ecef_m": state.gnss_position_ecef_m,
+            "gnss_velocity_ecef_m_s": state.gnss_velocity_ecef_m_s,
+            "imu_sample_time_s": state.imu_sample_time_s,
+            "magnetometer_sample_time_s": state.magnetometer_sample_time_s,
+            "barometer_sample_time_s": state.barometer_sample_time_s,
+            "gnss_sample_time_s": state.gnss_sample_time_s,
+            "accel_valid": state.accel_valid,
+            "gyro_valid": state.gyro_valid,
+            "magnetometer_valid": state.magnetometer_valid,
+            "barometer_valid": state.barometer_valid,
+            "gnss_valid": state.gnss_valid,
+        },
+    )
+
+
+def _sample_device(
+    body: Body,
+    scenario: dict[str, Any],
+    rng: np.random.Generator,
+    time_s: float,
+    launch_position: np.ndarray,
+    channel: int,
+    device: str,
+) -> dict[str, Any]:
+    sensors = scenario["sensors"]
+    state = _channel_state(body, sensors, rng, channel)
+    faults = _sensor_faults(scenario, body.name, device, time_s, channel)
+    state.fault_state = tuple(str(fault.get("type")) for fault in faults)
+    if device == "imu":
+        acceleration, imu_time, state.accel_valid = _apply_sensor_faults(
             body.last_specific_force_body_m_s2
             + state.accelerometer_bias_m_s2
-            + rng.normal(
-                0.0, sensors["accelerometer_noise_m_s2"], 3
-            )
+            + rng.normal(0.0, sensors["accelerometer_noise_m_s2"], 3),
+            state.acceleration_body_m_s2,
+            time_s,
+            state.imu_sample_time_s,
+            faults,
         )
-        state.gyro_body_rad_s = (
+        gyro, imu_time, state.gyro_valid = _apply_sensor_faults(
             body.body_rates_rad_s
             + state.gyro_bias_rad_s
-            + rng.normal(0.0, sensors["gyro_noise_rad_s"], 3)
+            + rng.normal(0.0, sensors["gyro_noise_rad_s"], 3),
+            state.gyro_body_rad_s,
+            imu_time,
+            state.imu_sample_time_s,
+            faults,
         )
-        state.imu_sample_time_s = time_s
-        state.next_imu_sample_s = (
-            time_s + 1.0 / float(sensors["imu_rate_hz"])
-        )
-    if (
-        not state.initialized
-        or time_s + 1e-12 >= state.next_magnetometer_sample_s
-    ):
-        state.magnetic_body = (
+        state.acceleration_body_m_s2 = acceleration
+        state.gyro_body_rad_s = gyro
+        state.imu_sample_time_s = imu_time
+        return {
+            "acceleration_body_m_s2": acceleration.copy(),
+            "gyro_body_rad_s": gyro.copy(),
+            "imu_sample_time_s": imu_time,
+            "accel_valid": state.accel_valid,
+            "gyro_valid": state.gyro_valid,
+        }
+    if device == "magnetometer":
+        magnetic, sample_time_s, state.magnetometer_valid = _apply_sensor_faults(
             quat_rotate(
-                quat_conjugate(body.attitude_wxyz), magnetic_ecef
+                quat_conjugate(body.attitude_wxyz),
+                unit(np.array([0.28, 0.08, -0.52])),
             )
             + state.magnetometer_bias
-            + rng.normal(0.0, float(sensors["magnetometer_noise"]), 3)
-        )
-        state.magnetometer_sample_time_s = time_s
-        state.next_magnetometer_sample_s = (
-            time_s + 1.0 / float(sensors["magnetometer_rate_hz"])
-        )
-    if (
-        not state.initialized
-        or time_s + 1e-12 >= state.next_barometer_sample_s
-    ):
-        state.barometric_altitude_m = float(
-            altitude
-            + state.barometer_bias_m
-            + rng.normal(0.0, sensors["barometer_noise_m"])
-        )
-        state.barometer_sample_time_s = time_s
-        state.next_barometer_sample_s = (
-            time_s + 1.0 / float(sensors["barometer_rate_hz"])
-        )
-    if (
-        not state.initialized
-        or time_s + 1e-12 >= state.next_gnss_sample_s
-    ):
-        state.gnss_position_ecef_m = (
-            body.position_ecef_m
-            + state.gnss_position_bias_m
-            + rng.normal(0.0, sensors["gnss_position_noise_m"], 3)
-        )
-        state.gnss_velocity_ecef_m_s = (
-            body.velocity_ecef_m_s
-            + state.gnss_velocity_bias_m_s
-            + rng.normal(0.0, sensors["gnss_velocity_noise_m_s"], 3)
-        )
-        state.gnss_sample_time_s = time_s
-        state.next_gnss_sample_s = (
-            time_s + 1.0 / float(sensors["gnss_rate_hz"])
-        )
-    imu_faults = _sensor_faults(
-        scenario, body.name, "imu", time_s, channel
-    )
-    magnetometer_faults = _sensor_faults(
-        scenario, body.name, "magnetometer", time_s, channel
-    )
-    barometer_faults = _sensor_faults(
-        scenario, body.name, "barometer", time_s, channel
-    )
-    gnss_faults = _sensor_faults(
-        scenario, body.name, "gnss", time_s, channel
-    )
-    acceleration, imu_time, accel_valid = _apply_sensor_faults(
-        state.acceleration_body_m_s2,
-        previous_acceleration,
-        state.imu_sample_time_s,
-        previous_imu_time,
-        imu_faults,
-    )
-    gyro, imu_time, gyro_valid = _apply_sensor_faults(
-        state.gyro_body_rad_s,
-        previous_gyro,
-        imu_time,
-        previous_imu_time,
-        imu_faults,
-    )
-    magnetic_body, magnetometer_time, magnetometer_valid = (
-        _apply_sensor_faults(
+            + rng.normal(0.0, float(sensors["magnetometer_noise"]), 3),
             state.magnetic_body,
-            previous_magnetic,
+            time_s,
             state.magnetometer_sample_time_s,
-            previous_magnetometer_time,
-            magnetometer_faults,
+            faults,
         )
-    )
-    barometer_value, barometer_time, barometer_valid = (
-        _apply_sensor_faults(
+        state.magnetic_body = magnetic
+        state.magnetometer_sample_time_s = sample_time_s
+        return {
+            "magnetic_body": magnetic.copy(),
+            "magnetometer_sample_time_s": sample_time_s,
+            "magnetometer_valid": state.magnetometer_valid,
+        }
+    if device == "barometer":
+        altitude = float(
+            np.linalg.norm(body.position_ecef_m) - np.linalg.norm(launch_position)
+        )
+        value, sample_time_s, state.barometer_valid = _apply_sensor_faults(
+            np.array(
+                [
+                    altitude
+                    + state.barometer_bias_m
+                    + rng.normal(0.0, sensors["barometer_noise_m"])
+                ]
+            ),
             np.array([state.barometric_altitude_m]),
-            previous_barometer,
+            time_s,
             state.barometer_sample_time_s,
-            previous_barometer_time,
-            barometer_faults,
+            faults,
         )
-    )
-    gnss_value, gnss_time, gnss_valid = _apply_sensor_faults(
-        np.concatenate(
-            (state.gnss_position_ecef_m, state.gnss_velocity_ecef_m_s)
-        ),
-        previous_gnss,
-        state.gnss_sample_time_s,
-        previous_gnss_time,
-        gnss_faults,
-    )
-    state.acceleration_body_m_s2 = acceleration.copy()
-    state.gyro_body_rad_s = gyro.copy()
-    state.magnetic_body = magnetic_body.copy()
-    state.barometric_altitude_m = float(barometer_value[0])
-    state.gnss_position_ecef_m = gnss_value[:3].copy()
-    state.gnss_velocity_ecef_m_s = gnss_value[3:].copy()
-    state.imu_sample_time_s = imu_time
-    state.magnetometer_sample_time_s = magnetometer_time
-    state.barometer_sample_time_s = barometer_time
-    state.gnss_sample_time_s = gnss_time
-    state.fault_state = tuple(
-        str(fault.get("type"))
-        for fault in (
-            imu_faults
-            + magnetometer_faults
-            + barometer_faults
-            + gnss_faults
+        state.barometric_altitude_m = float(value[0])
+        state.barometer_sample_time_s = sample_time_s
+        return {
+            "barometric_altitude_m": state.barometric_altitude_m,
+            "barometer_sample_time_s": sample_time_s,
+            "barometer_valid": state.barometer_valid,
+        }
+    if device == "gnss":
+        value, sample_time_s, state.gnss_valid = _apply_sensor_faults(
+            np.concatenate(
+                (
+                    body.position_ecef_m
+                    + state.gnss_position_bias_m
+                    + rng.normal(0.0, sensors["gnss_position_noise_m"], 3),
+                    body.velocity_ecef_m_s
+                    + state.gnss_velocity_bias_m_s
+                    + rng.normal(0.0, sensors["gnss_velocity_noise_m_s"], 3),
+                )
+            ),
+            np.concatenate(
+                (state.gnss_position_ecef_m, state.gnss_velocity_ecef_m_s)
+            ),
+            time_s,
+            state.gnss_sample_time_s,
+            faults,
         )
+        state.gnss_position_ecef_m = value[:3].copy()
+        state.gnss_velocity_ecef_m_s = value[3:].copy()
+        state.gnss_sample_time_s = sample_time_s
+        return {
+            "gnss_position_ecef_m": value[:3].copy(),
+            "gnss_velocity_ecef_m_s": value[3:].copy(),
+            "gnss_sample_time_s": sample_time_s,
+            "gnss_valid": state.gnss_valid,
+        }
+    raise ValueError(f"unknown sensor device {device!r}")
+
+
+def _frame_from_values(
+    body: Body,
+    scenario: dict[str, Any],
+    rng: np.random.Generator,
+    time_s: float,
+    dt_s: float,
+    separated: bool,
+    values: dict[str, Any],
+) -> SensorFrame:
+    sensors = scenario["sensors"]
+    gnss_position = np.asarray(
+        values.get("gnss_position_ecef_m", np.zeros(3))
     )
-    state.initialized = True
-    barometer_altitude = float(barometer_value[0])
-    gnss_position = gnss_value[:3]
-    gnss_velocity = gnss_value[3:]
+    gnss_velocity = np.asarray(
+        values.get("gnss_velocity_ecef_m_s", np.zeros(3))
+    )
+    up = unit(body.position_ecef_m)
     vertical_velocity = float(np.dot(gnss_velocity, up))
     dynamic_pressure = max(
         0.0,
@@ -330,29 +473,33 @@ def _sensor_frame(
     return SensorFrame(
         time_s,
         dt_s,
-        (ctypes.c_double * 3)(*acceleration),
-        (ctypes.c_double * 3)(*gyro),
-        (ctypes.c_double * 3)(*magnetic_body),
-        barometer_altitude,
+        (ctypes.c_double * 3)(
+            *values.get("acceleration_body_m_s2", np.zeros(3))
+        ),
+        (ctypes.c_double * 3)(*values.get("gyro_body_rad_s", np.zeros(3))),
+        (ctypes.c_double * 3)(
+            *values.get("magnetic_body", np.array([1.0, 0.0, 0.0]))
+        ),
+        float(values.get("barometric_altitude_m", 0.0)),
         (ctypes.c_double * 3)(*gnss_position),
         (ctypes.c_double * 3)(*gnss_velocity),
         vertical_velocity,
         dynamic_pressure,
         engine_health,
-        gnss_valid,
-        barometer_valid,
+        int(values.get("gnss_valid", 0)),
+        int(values.get("barometer_valid", 0)),
         int(separated),
-        barometer_time,
-        gnss_time,
+        float(values.get("barometer_sample_time_s", 0.0)),
+        float(values.get("gnss_sample_time_s", 0.0)),
         int(engine_health > 0.0),
         int(propulsion_running),
         int(body.drogue_deployed),
         int(body.main_deployed),
-        imu_time,
-        magnetometer_time,
-        accel_valid,
-        gyro_valid,
-        magnetometer_valid,
+        float(values.get("imu_sample_time_s", 0.0)),
+        float(values.get("magnetometer_sample_time_s", 0.0)),
+        int(values.get("accel_valid", 0)),
+        int(values.get("gyro_valid", 0)),
+        int(values.get("magnetometer_valid", 0)),
     )
 
 
@@ -365,6 +512,7 @@ def _run_fsw_substeps(
     launch_position: np.ndarray,
     separated: bool,
     current_output: FswOutput,
+    avionics: _AvionicsRuntime,
     on_sensor: Callable[
         [str, list[SensorFrame], FswOutput], None
     ] | None = None,
@@ -373,67 +521,148 @@ def _run_fsw_substeps(
     shadow_core: FlightCore | None = None,
     shadow_output: FswOutput | None = None,
 ) -> tuple[FswOutput, FswOutput | None]:
-    fsw_step_s = 1.0 / float(scenario["sensors"]["imu_rate_hz"])
     timing_override_s = (
         None
         if timing_mode == "measured"
         else injected_execution_time_s if timing_mode == "injected" else 0.0
     )
     output = current_output
-    while body.next_fsw_sample_s <= time_s + 1e-12:
-        channel_count = int(scenario["sensors"].get("channel_count", 1))
-        frames = [
-            _sensor_frame(
-                body,
-                scenario,
-                rng,
-                body.next_fsw_sample_s,
-                fsw_step_s,
-                launch_position,
-                separated,
-                channel,
+    avionics.clock.advance_to(time_s)
+    while scheduled := avionics.queue.pop_due(time_s):
+        if scheduled.kind == "device_sample":
+            avionics.devices.released(scheduled)
+            measurements = [
+                _sample_device(
+                    body,
+                    scenario,
+                    rng,
+                    scheduled.truth_time_s,
+                    launch_position,
+                    channel,
+                    scheduled.subsystem,
+                )
+                for channel in range(len(avionics.received))
+            ]
+            payload = {
+                "body": body.name,
+                "device": scheduled.subsystem,
+                "truth_time_s": time_s,
+                "sensor_sample_time_s": scheduled.truth_time_s,
+                "measurements": measurements,
+            }
+            if avionics.devices.complete(scheduled, payload) is None:
+                _record_avionics_timeline(
+                    avionics, payload, scheduled.subsystem
+                )
+        elif scheduled.kind == "device_complete":
+            device_profile = avionics.devices.profiles[
+                str(scheduled.payload["device"])
+            ]
+            if (
+                avionics.bus.submit(
+                    scheduled, device_profile.publication_delay_s
+                )
+                is None
+            ):
+                _record_avionics_timeline(
+                    avionics,
+                    scheduled.payload,
+                    str(scheduled.payload["device"]),
+                )
+        elif scheduled.kind == "bus_publish":
+            avionics.bus.published(scheduled)
+        elif scheduled.kind == "bus_receive":
+            for received, measurement in zip(
+                avionics.received,
+                scheduled.payload["measurements"],
+                strict=True,
+            ):
+                received.update(measurement)
+            _record_avionics_timeline(
+                avionics,
+                scheduled.payload,
+                str(scheduled.payload["device"]),
             )
-            for channel in range(channel_count)
-        ]
-        frame = frames[0]
-        propulsion = body.stage["propulsion"]
-        burn_duration_s = float(propulsion["burn_duration_s"])
-        propulsion_running = (
-            body.engine_started_s is not None
-            and body.next_fsw_sample_s
-                < body.engine_started_s + burn_duration_s
-        )
-        output = core.step(
-            frame,
-            propulsion_running=propulsion_running,
-            drogue_deployed=body.drogue_deployed,
-            main_deployed=body.main_deployed,
-            previous_execution_time_s=timing_override_s,
-            deadline_missed=False if timing_mode == "deterministic" else None,
-            sensor_channels=frames[1:],
-        )
-        if shadow_core is not None:
-            shadow_frames = frames
-            if output.stage_separate:
-                shadow_frames = [
-                    SensorFrame.from_buffer_copy(item) for item in frames
-                ]
-                for item in shadow_frames:
-                    item.stage_separated = 1
-            shadow_output = shadow_core.step(
-                shadow_frames[0],
-                propulsion_running=propulsion_running,
+        elif scheduled.kind == "task_release":
+            avionics.tasks.released(scheduled)
+            tick = scheduled.payload["tick"]
+            frames = [
+                _frame_from_values(
+                    body,
+                    scenario,
+                    rng,
+                    scheduled.truth_time_s,
+                    tick.dt_s,
+                    separated,
+                    received,
+                )
+                for received in avionics.received
+            ]
+            propulsion = body.stage["propulsion"]
+            propulsion_running = (
+                body.engine_started_s is not None
+                and scheduled.truth_time_s
+                < body.engine_started_s
+                + float(propulsion["burn_duration_s"])
+            )
+            avionics.tasks.complete(
+                scheduled,
+                {
+                    "frames": frames,
+                    "propulsion_running": propulsion_running,
+                },
+            )
+        elif scheduled.kind == "task_complete":
+            frames = scheduled.payload["frames"]
+            deadline_missed = (
+                bool(scheduled.payload["deadline_missed"])
+                if timing_mode == "deterministic"
+                else None
+            )
+            completed_output = core.step(
+                frames[0],
+                propulsion_running=scheduled.payload["propulsion_running"],
                 drogue_deployed=body.drogue_deployed,
                 main_deployed=body.main_deployed,
                 previous_execution_time_s=timing_override_s,
-                deadline_missed=(
-                    False if timing_mode == "deterministic" else None
-                ),
-                sensor_channels=shadow_frames[1:],
+                deadline_missed=deadline_missed,
+                sensor_channels=frames[1:],
             )
-        if on_sensor:
-            on_sensor(body.name, frames, output)
-        body.next_fsw_sample_s += fsw_step_s
+            avionics.last_task_time_s = float(
+                scheduled.payload["task_release_time_s"]
+            )
+            completed_shadow = shadow_output
+            if shadow_core is not None:
+                shadow_frames = frames
+                if completed_output.stage_separate:
+                    shadow_frames = [
+                        SensorFrame.from_buffer_copy(item) for item in frames
+                    ]
+                    for item in shadow_frames:
+                        item.stage_separated = 1
+                completed_shadow = shadow_core.step(
+                    shadow_frames[0],
+                    propulsion_running=scheduled.payload[
+                        "propulsion_running"
+                    ],
+                    drogue_deployed=body.drogue_deployed,
+                    main_deployed=body.main_deployed,
+                    previous_execution_time_s=timing_override_s,
+                    deadline_missed=deadline_missed,
+                    sensor_channels=shadow_frames[1:],
+                )
+            if on_sensor:
+                on_sensor(body.name, frames, completed_output)
+            avionics.tasks.publish(
+                scheduled,
+                {
+                    "output": completed_output,
+                    "shadow_output": completed_shadow,
+                },
+            )
+        elif scheduled.kind == "task_publish":
+            output = scheduled.payload["output"]
+            shadow_output = scheduled.payload["shadow_output"]
     return output, shadow_output
 
 
@@ -820,6 +1049,17 @@ def run_simulation(
     )
     dormant_output: FswOutput | None = FswOutput()
     outputs: dict[str, FswOutput] = {"integrated_stack": FswOutput()}
+    avionics_timeline: list[dict[str, Any]] = []
+    integrated_avionics = _avionics_runtime(
+        scenario,
+        seed,
+        "integrated_stack",
+        0.0,
+        avionics_timeline,
+        record_timeline=not summary_only,
+    )
+    avionics_runtimes = {"integrated_stack": integrated_avionics}
+    all_avionics_runtimes = [integrated_avionics]
     telemetry: list[dict[str, Any]] = []
     fsw_rows: list[dict[str, Any]] = []
     summary_statistics = {
@@ -916,6 +1156,7 @@ def run_simulation(
                     launch_position,
                     separated,
                     outputs[body.name],
+                    avionics_runtimes[body.name],
                     record_sensor,
                     timing_mode,
                     injected_execution_time_s,
@@ -948,6 +1189,9 @@ def run_simulation(
                 core_stage, upper_stage = _split_stack(integrated_stack, scenario)
                 integrated_core = cores.pop("integrated_stack")
                 integrated_output = outputs.pop("integrated_stack")
+                integrated_avionics = avionics_runtimes.pop(
+                    "integrated_stack"
+                )
                 assert dormant_core is not None
                 assert dormant_output is not None
                 bodies = [core_stage, upper_stage]
@@ -955,6 +1199,26 @@ def run_simulation(
                 cores["upper_stage"] = integrated_core
                 outputs["core_stage"] = dormant_output
                 outputs["upper_stage"] = integrated_output
+                previous_fsw_time_s = integrated_avionics.last_task_time_s
+                assert previous_fsw_time_s is not None
+                for branch in ("core_stage", "upper_stage"):
+                    runtime = _avionics_runtime(
+                        scenario,
+                        seed,
+                        branch,
+                        previous_fsw_time_s
+                        + 1.0
+                        / float(
+                            scenario["avionics"]["tasks"]["fsw"][
+                                "sample_rate_hz"
+                            ]
+                        ),
+                        avionics_timeline,
+                        integrated_avionics.received,
+                        record_timeline=not summary_only,
+                    )
+                    avionics_runtimes[branch] = runtime
+                    all_avionics_runtimes.append(runtime)
                 dormant_core = None
                 dormant_output = None
                 previous_modes.pop("integrated_stack", None)
@@ -968,11 +1232,6 @@ def run_simulation(
                         "core stage and upper stage created",
                     )
                 )
-                core_stage.next_fsw_sample_s = (
-                    integrated_stack.next_fsw_sample_s
-                )
-                upper_stage.next_fsw_sample_s = integrated_stack.next_fsw_sample_s
-
             current_values: dict[str, tuple[float, float, float]] = {}
             for body in bodies:
                 output = outputs[body.name]
@@ -1226,6 +1485,27 @@ def run_simulation(
         "altitude_envelope_20_to_100_km": 20_000.0 <= maximum_altitude_m <= 100_000.0,
         "navigation_altitude_rmse_below_25_m": altitude_rmse_m < 25.0,
     }
+    dropped_deadlines = {
+        "devices": {
+            name: sum(
+                runtime.devices.dropped_deadlines[name]
+                for runtime in all_avionics_runtimes
+            )
+            for name in scenario["avionics"]["devices"]
+        },
+        "tasks": {
+            "fsw": sum(
+                runtime.tasks.dropped_deadlines["fsw"]
+                for runtime in all_avionics_runtimes
+            )
+        },
+        "buses": {
+            "sensor_bus": sum(
+                runtime.bus.dropped_deadlines
+                for runtime in all_avionics_runtimes
+            )
+        },
+    }
     manifest = {
         "schema_version": RUN_SCHEMA_VERSION,
         "model_version": __version__,
@@ -1245,6 +1525,11 @@ def run_simulation(
                 if timing_mode == "injected"
                 else None
             ),
+        },
+        "avionics_timing": {
+            "profiles": scenario["avionics"],
+            "dropped_deadlines": dropped_deadlines,
+            "timeline_rows": len(avionics_timeline),
         },
         "cancelled": cancelled,
         "aero_out_of_envelope_samples": invalid_rows,
@@ -1319,6 +1604,7 @@ def run_simulation(
         write_csv(output_dir / "truth.csv", telemetry)
         write_csv(output_dir / "fsw.csv", fsw_rows)
         write_csv(output_dir / "events.csv", events)
+        write_csv(output_dir / "avionics.csv", avionics_timeline)
         artifact_paths = [
             *configuration_artifacts,
             *(
@@ -1329,7 +1615,9 @@ def run_simulation(
                     "truth.csv",
                     "fsw.csv",
                     "events.csv",
+                    "avionics.csv",
                 )
+                if (output_dir / filename).exists()
             ),
         ]
         register_artifacts(
@@ -1338,7 +1626,14 @@ def run_simulation(
             artifact_paths,
         )
         write_manifest(output_dir, manifest)
-    result = RunResult(output_dir, manifest, telemetry, fsw_rows, events)
+    result = RunResult(
+        output_dir,
+        manifest,
+        telemetry,
+        fsw_rows,
+        events,
+        avionics_timeline,
+    )
     rocketpy_config = scenario.get("reference_backends", {}).get("rocketpy", {})
     if (
         create_report

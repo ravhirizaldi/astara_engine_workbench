@@ -23,7 +23,9 @@ Scenario + Vehicle
 6-DOF Truth Model --> truth.csv
         |
         v
-Sensor Emulator --> sensors.csv.gz --+
+Sensor Emulator --> DeviceScheduler --> BusScheduler --> avionics.csv
+                            |                |
+                            +----------------+--> sensors.csv.gz --+
 Command Schedule --> commands.csv ----+--> typed FswInput --> C++ Flight Core
 Truth-derived adapters ----------------+                         |
                                                                  +--> fsw.csv
@@ -34,8 +36,9 @@ Truth-derived adapters ----------------+                         |
                                                                  +--> Truth Model
 ```
 
-`truth.csv`, `sensors.csv.gz`, `commands.csv`, and `fsw.csv` are deliberately
-separate. Flight software receives only the versioned `FswInput` ABI. The
+`truth.csv`, `avionics.csv`, `sensors.csv.gz`, `commands.csv`, and `fsw.csv`
+are deliberately separate. Flight software receives only the versioned
+`FswInput` ABI. The
 Python bridge maps recorded sensor channels plus typed air-data, propulsion,
 recovery-feedback, command, and platform-timing fields, so recorded inputs can
 replace the simulator through `awb replay`.

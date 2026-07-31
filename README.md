@@ -18,7 +18,7 @@ generation.
 | Vehicle dynamics | ECEF translation, body quaternions, rotating Earth, gravity, atmosphere, wind, rigid-body rotation, staging, and recovery | `truth.csv` |
 | Vehicle definition | Two stages, engine clusters, tabulated propulsion, mass properties, aerodynamic coefficients, fixed or movable fins, sensors, and actuators | `vehicle_definition.json` |
 | Mission definition | Launch environment, command schedule, event-triggered separation and ignition, guidance schedule, faults, and uncertainty | `scenario.json`, `events.csv` |
-| Sensor simulation | One to three independent IMU, magnetometer, barometer, and GNSS channels with rate, timestamp, bias, noise, health, and injected faults | `sensors.csv.gz` |
+| Avionics simulation | Independently clocked IMU, magnetometer, barometer, GNSS, sensor-bus, and FSW tasks with drift, jitter, processing/publication delays, and deadline drops | `avionics.csv`, `sensors.csv.gz` |
 | Flight software | C++17 mission logic, ECEF navigation, guidance, sensor voting, fault handling, TVC/fin commands, recovery sequencing, and health reporting | `fsw.csv` |
 | Replay | Recorded sensor channels and commands replay through the same C++ flight core | `fsw_replay.csv` |
 | Analysis | Timestep convergence, seeded Monte Carlo, retained failure runs, percentile summaries, and optional RocketPy comparison | `convergence.csv`, `monte_carlo.csv`, `summary.json` |
@@ -143,6 +143,7 @@ selects another root.
 | `source_vehicle_definition.json` | Byte-for-byte source vehicle definition |
 | `truth.csv` | Truth state, environment, propulsion, and actuation history |
 | `sensors.csv.gz` | Timestamped per-channel sensor inputs sent to flight software |
+| `avionics.csv` | Truth, sample, completion, bus-publication, and FSW-receive times for each device transaction |
 | `commands.csv` | Recorded flight-software commands used by replay |
 | `fsw.csv` | Navigation, modes, faults, sensor health, commands, timing, and actuation |
 | `events.csv` | Mission and simulation event timeline |

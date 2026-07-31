@@ -35,8 +35,8 @@
     ],
     "separation_impulse_m_s": 0.8,
     "commands": [
-      {"time_s": 0.0, "command": "ARM"},
-      {"time_s": 0.005, "command": "LAUNCH"}
+      {"time_s": 0.025, "command": "ARM"},
+      {"time_s": 0.03, "command": "LAUNCH"}
     ],
     "attitude_schedule": [
       {"time_s": 0.0, "pitch_deg": 0.0, "azimuth_deg": 90.0},

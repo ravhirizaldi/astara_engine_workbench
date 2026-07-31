@@ -41,6 +41,11 @@ class SensorChannelState:
     next_magnetometer_sample_s: float = 0.0
     next_barometer_sample_s: float = 0.0
     next_gnss_sample_s: float = 0.0
+    accel_valid: int = 0
+    gyro_valid: int = 0
+    magnetometer_valid: int = 0
+    barometer_valid: int = 0
+    gnss_valid: int = 0
     initialized: bool = False
     fault_state: tuple[str, ...] = ()
 
