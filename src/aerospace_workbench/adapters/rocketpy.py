@@ -111,7 +111,7 @@ def run_rocketpy_reference(
     flight = Flight(
         rocket=rocket,
         environment=environment,
-        rail_length=12.0,
+        rail_length=float(environment_data["launch_rail"]["length_m"]),
         inclination=90.0,
         heading=float(environment_data["launch_azimuth_deg"]),
         max_time=reference_end,

@@ -10,6 +10,49 @@ import numpy as np
 from .sensors import SensorChannelState
 
 
+def stage_propellant_fraction(stage: dict[str, Any], mass_kg: float) -> float:
+    propellant_mass = float(stage["fuel_mass_kg"]) + float(
+        stage["oxidizer_mass_kg"]
+    )
+    return min(
+        max((mass_kg - float(stage["dry_mass_kg"])) / propellant_mass, 0.0),
+        1.0,
+    )
+
+
+def stage_center_of_mass_m(
+    stage: dict[str, Any], propellant_fraction: float
+) -> float:
+    table = stage.get("mass_properties")
+    if not table:
+        return float(stage["center_of_mass_m"])
+    return float(
+        np.interp(
+            propellant_fraction,
+            [row["propellant_fraction"] for row in table],
+            [row["center_of_mass_m"] for row in table],
+        )
+    )
+
+
+def stage_inertia_kg_m2(
+    stage: dict[str, Any], propellant_fraction: float
+) -> np.ndarray:
+    table = stage.get("mass_properties")
+    if not table:
+        return np.asarray(stage["inertia_kg_m2"], dtype=float)
+    return np.array(
+        [
+            np.interp(
+                propellant_fraction,
+                [row["propellant_fraction"] for row in table],
+                [row["inertia_kg_m2"][axis] for row in table],
+            )
+            for axis in range(3)
+        ]
+    )
+
+
 @dataclass
 class Body:
     name: str
@@ -23,6 +66,7 @@ class Body:
     oxidizer_kg: float
     upper_mass_kg: float = 0.0
     stacked_length_m: float | None = None
+    attached_stage: dict[str, Any] | None = None
     landed: bool = False
     engine_started_s: float | None = None
     engine_health_percent: float = 100.0
@@ -44,6 +88,8 @@ class Body:
     last_chamber_pressure_pa: float = 0.0
     last_engine_temperature_k: float = 293.15
     last_engine_rpm: float = 0.0
+    hold_down_released_s: float | None = None
+    rail_exit_s: float | None = None
 
     @property
     def mass_kg(self) -> float:
@@ -65,40 +111,49 @@ class Body:
 
     @property
     def center_of_mass_m(self) -> float:
-        table = self.stage.get("mass_properties")
-        if not table:
-            return float(self.stage["center_of_mass_m"])
-        return float(
-            np.interp(
-                self.propellant_fraction,
-                [row["propellant_fraction"] for row in table],
-                [row["center_of_mass_m"] for row in table],
-            )
+        own_center = stage_center_of_mass_m(
+            self.stage, self.propellant_fraction
         )
+        if self.attached_stage is None or self.upper_mass_kg <= 0.0:
+            return own_center
+        attached_fraction = stage_propellant_fraction(
+            self.attached_stage, self.upper_mass_kg
+        )
+        attached_center = float(self.stage["length_m"]) + (
+            stage_center_of_mass_m(self.attached_stage, attached_fraction)
+        )
+        own_mass = self.mass_kg - self.upper_mass_kg
+        return (
+            own_mass * own_center + self.upper_mass_kg * attached_center
+        ) / self.mass_kg
 
     @property
     def inertia_kg_m2(self) -> np.ndarray:
-        table = self.stage.get("mass_properties")
-        if table:
-            inertia = np.array(
-                [
-                    np.interp(
-                        self.propellant_fraction,
-                        [row["propellant_fraction"] for row in table],
-                        [row["inertia_kg_m2"][axis] for row in table],
-                    )
-                    for axis in range(3)
-                ]
+        inertia = stage_inertia_kg_m2(
+            self.stage, self.propellant_fraction
+        )
+        if self.attached_stage is not None and self.upper_mass_kg > 0.0:
+            attached_fraction = stage_propellant_fraction(
+                self.attached_stage, self.upper_mass_kg
             )
-        else:
-            inertia = np.asarray(self.stage["inertia_kg_m2"], dtype=float)
-        if self.upper_mass_kg > 0.0:
-            inertia = inertia + np.array(
-                [
-                    2.4,
-                    self.upper_mass_kg * 2.2**2,
-                    self.upper_mass_kg * 2.2**2,
-                ]
+            attached_inertia = stage_inertia_kg_m2(
+                self.attached_stage, attached_fraction
+            )
+            own_mass = self.mass_kg - self.upper_mass_kg
+            own_center = stage_center_of_mass_m(
+                self.stage, self.propellant_fraction
+            )
+            attached_center = float(self.stage["length_m"]) + (
+                stage_center_of_mass_m(
+                    self.attached_stage, attached_fraction
+                )
+            )
+            combined_center = self.center_of_mass_m
+            inertia = inertia + attached_inertia
+            inertia[1:] += (
+                own_mass * (own_center - combined_center) ** 2
+                + self.upper_mass_kg
+                * (attached_center - combined_center) ** 2
             )
         return np.maximum(inertia, 1e-3)
 
@@ -108,11 +163,28 @@ class Body:
         if self.stacked_length_m is None:
             return combined
         combined["length_m"] = self.stacked_length_m
-        combined["center_of_mass_m"] = self.stacked_length_m * 0.54
+        combined["center_of_mass_m"] = self.center_of_mass_m
         combined["aerodynamics"] = dict(self.stage["aerodynamics"])
-        combined["aerodynamics"][
-            "center_of_pressure_m"
-        ] = self.stacked_length_m * 0.68
+        if self.attached_stage is not None:
+            own_aero = self.stage["aerodynamics"]
+            attached_aero = self.attached_stage["aerodynamics"]
+            own_table = own_aero.get("coefficient_table") or [{}]
+            attached_table = attached_aero.get("coefficient_table") or [{}]
+            own_weight = float(self.stage["diameter_m"]) ** 2 * float(
+                own_table[0].get("normal_force_slope_per_rad", 1.0)
+            )
+            attached_weight = float(
+                self.attached_stage["diameter_m"]
+            ) ** 2 * float(
+                attached_table[0].get("normal_force_slope_per_rad", 1.0)
+            )
+            attached_cp = float(self.stage["length_m"]) + float(
+                attached_aero["center_of_pressure_m"]
+            )
+            combined["aerodynamics"]["center_of_pressure_m"] = (
+                own_weight * float(own_aero["center_of_pressure_m"])
+                + attached_weight * attached_cp
+            ) / (own_weight + attached_weight)
         return combined
 
 

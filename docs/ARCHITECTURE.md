@@ -46,6 +46,13 @@ discrete/recovery-feedback, command, and platform device samples. No live
 simulation truth field is packaged directly into `FswInput`; recorded inputs
 can still replace the simulator through `awb replay`.
 
+The integrated stack composes stage CG and diagonal inertia with the parallel
+axis theorem and area/slope-weights stage center of pressure. Separation is an
+axial impulse in N s divided by each child mass; every split asserts mass,
+linear/angular momentum, and separation-device energy residuals. The scenario
+launch rail supplies hold-down release, friction, button positions, and exit
+length, with release and rail-exit events recorded in `events.csv`.
+
 The sensor suite accepts up to three timestamped accelerometer/gyro,
 magnetometer, barometer, and GNSS channels. Magnetometer health is independent
 of accelerometer/gyro health; disturbed magnetic data therefore does not remove

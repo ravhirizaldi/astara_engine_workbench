@@ -308,7 +308,63 @@ def validate_scenario(scenario: dict[str, Any]) -> None:
             f"{prefix}.recovery",
         )
 
+    rail = environment.get("launch_rail")
+    if not isinstance(rail, dict):
+        raise ValueError("environment.launch_rail must be an object")
+    _positive(rail, ("length_m",), "environment.launch_rail")
+    friction = rail.get("friction_coefficient")
+    if (
+        not isinstance(friction, (int, float))
+        or isinstance(friction, bool)
+        or friction < 0.0
+    ):
+        raise ValueError(
+            "environment.launch_rail.friction_coefficient must be nonnegative"
+        )
+    buttons = rail.get("button_positions_m")
+    stacked_length_m = sum(float(stage["length_m"]) for stage in stages)
+    if (
+        not isinstance(buttons, list)
+        or len(buttons) < 2
+        or any(
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or not 0.0 <= float(value) <= stacked_length_m
+            for value in buttons
+        )
+        or any(
+            float(right) <= float(left)
+            for left, right in zip(buttons, buttons[1:])
+        )
+        or (
+            isinstance(buttons, list)
+            and buttons
+            and min(float(value) for value in buttons)
+            >= float(rail["length_m"])
+        )
+    ):
+        raise ValueError(
+            "environment.launch_rail.button_positions_m must contain "
+            "increasing vehicle-axis positions"
+        )
+    release = rail.get("hold_down_release")
+    if not isinstance(release, dict):
+        raise ValueError(
+            "environment.launch_rail.hold_down_release must be an object"
+        )
+    if release.get("condition") != "thrust_to_weight":
+        raise ValueError(
+            "environment.launch_rail.hold_down_release.condition must be "
+            "thrust_to_weight"
+        )
+    _positive(
+        release,
+        ("minimum_thrust_to_weight",),
+        "environment.launch_rail.hold_down_release",
+    )
+
     mission = scenario.get("mission", {})
+    _positive(mission, ("separation_impulse_ns",), "mission")
     resolve_mission_events(scenario)
     schedule = mission.get("attitude_schedule")
     if not isinstance(schedule, list) or not 2 <= len(schedule) <= 32:

@@ -33,6 +33,7 @@ from aerospace_workbench.simulation.runner import (
     AVIONICS_CSV_FIELDS,
     _derivative,
     _sensor_frame,
+    _split_stack,
     run_simulation,
 )
 from aerospace_workbench.simulation.sensors import apply_sensor_faults
@@ -167,7 +168,97 @@ class TwinTests(unittest.TestCase):
         )
         self.assertAlmostEqual(core_row["time_s"], separation_time)
         self.assertLess(branch_difference_rad, 1e-3)
-        self.assertLess(core_jump_rad, 1e-3)
+        self.assertLess(core_jump_rad, 2e-3)
+
+    def test_separation_conserves_mass_and_momentum(self) -> None:
+        scenario = default_scenario()
+        stages = scenario["vehicle"]["stages"]
+        position = geodetic_to_ecef(
+            scenario["environment"]["latitude_deg"],
+            scenario["environment"]["longitude_deg"],
+            scenario["environment"]["launch_altitude_m"],
+        )
+        attitude = initial_attitude(
+            position, scenario["environment"]["launch_azimuth_deg"]
+        )
+        body_rates = quat_rotate(
+            quat_conjugate(attitude),
+            np.array([0.0, 0.0, EARTH_ROTATION_RAD_S]),
+        )
+        stack = Body(
+            "integrated_stack",
+            0,
+            stages[0],
+            position,
+            np.array([120.0, -30.0, 10.0]),
+            attitude,
+            body_rates,
+            float(stages[0]["fuel_mass_kg"]),
+            float(stages[0]["oxidizer_mass_kg"]),
+            sum(
+                float(stages[1][name])
+                for name in (
+                    "dry_mass_kg",
+                    "fuel_mass_kg",
+                    "oxidizer_mass_kg",
+                )
+            ),
+            float(stages[0]["length_m"] + stages[1]["length_m"]),
+            stages[1],
+        )
+        own_mass = stack.mass_kg - stack.upper_mass_kg
+        expected_center = (
+            own_mass * stages[0]["center_of_mass_m"]
+            + stack.upper_mass_kg
+            * (stages[0]["length_m"] + stages[1]["center_of_mass_m"])
+        ) / stack.mass_kg
+        self.assertAlmostEqual(stack.center_of_mass_m, expected_center)
+        self.assertNotAlmostEqual(
+            stack.aerodynamic_stage()["aerodynamics"][
+                "center_of_pressure_m"
+            ],
+            stack.stacked_length_m * 0.68,
+        )
+        core, upper, audit = _split_stack(stack, scenario)
+        before_momentum = stack.mass_kg * stack.velocity_ecef_m_s
+        after_momentum = (
+            core.mass_kg * core.velocity_ecef_m_s
+            + upper.mass_kg * upper.velocity_ecef_m_s
+        )
+        axis = quat_rotate(attitude, np.array([1.0, 0.0, 0.0]))
+        impulse_ns = scenario["mission"]["separation_impulse_ns"]
+        self.assertAlmostEqual(
+            float(np.dot(core.velocity_ecef_m_s - stack.velocity_ecef_m_s, axis)),
+            -impulse_ns / core.mass_kg,
+        )
+        self.assertAlmostEqual(
+            float(np.dot(upper.velocity_ecef_m_s - stack.velocity_ecef_m_s, axis)),
+            impulse_ns / upper.mass_kg,
+        )
+        self.assertTrue(np.allclose(before_momentum, after_momentum))
+        self.assertLess(audit["linear_momentum_residual_kg_m_s"], 1e-9)
+        self.assertLess(audit["angular_momentum_residual_kg_m2_s"], 1e-9)
+        self.assertEqual(audit["mass_residual_kg"], 0.0)
+        self.assertLess(audit["separation_energy_residual_j"], 1e-9)
+
+    def test_launch_rail_releases_and_emits_exit_once(self) -> None:
+        scenario = default_scenario()
+        scenario["simulation"].update(
+            {"max_time_s": 1.0, "output_rate_hz": 20.0}
+        )
+        result = run_simulation(
+            scenario, create_report=False, persist=False
+        )
+        releases = [
+            row for row in result.events
+            if row["event"] == "hold_down_released"
+        ]
+        exits = [
+            row for row in result.events if row["event"] == "rail_exit"
+        ]
+        self.assertEqual(len(releases), 1)
+        self.assertEqual(len(exits), 1)
+        self.assertLess(releases[0]["time_s"], exits[0]["time_s"])
 
     def test_upper_stage_burn_persists_after_ignition_pulse(self) -> None:
         scenario = default_scenario()

@@ -15,7 +15,7 @@ generation.
 
 | Area | Current capability | Primary evidence |
 |---|---|---|
-| Vehicle dynamics | ECEF translation, body quaternions, rotating Earth, gravity, atmosphere, wind, rigid-body rotation, staging, and recovery | `truth.csv` |
+| Vehicle dynamics | ECEF translation, body quaternions, rotating Earth, configurable constrained launch rail, composited stack mass properties, momentum-audited staging, and recovery | `truth.csv`, `events.csv` |
 | Vehicle definition | Two stages, engine clusters, tabulated propulsion, mass properties, aerodynamic coefficients, fixed or movable fins, sensors, and actuators | `vehicle_definition.json` |
 | Mission definition | Launch environment, command schedule, event-triggered separation and ignition, guidance schedule, faults, and uncertainty | `scenario.json`, `events.csv` |
 | Avionics simulation | Independently clocked navigation sensors, air-data computer, engine controller, discrete/recovery modules, flight-computer platform, bus, and FSW task with latency, quantization, startup/reset behavior, faults, and deadline drops | `avionics.csv`, `sensors.csv.gz` |

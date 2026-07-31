@@ -141,6 +141,20 @@ class ScenarioTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "flight-software period"):
             validate_scenario(scenario)
 
+    def test_rejects_invalid_separation_and_launch_rail(self) -> None:
+        scenario = default_scenario()
+        scenario["mission"]["separation_impulse_ns"] = 0.0
+        with self.assertRaisesRegex(ValueError, "separation_impulse_ns"):
+            validate_scenario(scenario)
+
+        scenario = default_scenario()
+        scenario["environment"]["launch_rail"]["button_positions_m"] = [
+            3.0,
+            2.0,
+        ]
+        with self.assertRaisesRegex(ValueError, "button_positions_m"):
+            validate_scenario(scenario)
+
     def test_rejects_incomplete_device_models(self) -> None:
         scenario = default_scenario()
         del scenario["avionics"]["devices"]["engine_controller"]["timeout_s"]

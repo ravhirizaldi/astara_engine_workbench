@@ -929,6 +929,55 @@ def _integrate_body(
 ) -> AeroResult:
     if body.landed:
         return AeroResult(np.zeros(3), np.zeros(3), 0.0, 0.0, 0.0, True)
+    rail = scenario["environment"]["launch_rail"]
+    constrained_to_rail = (
+        body.upper_mass_kg > 0.0 and body.rail_exit_s is None
+    )
+    rail_attitude = initial_attitude(
+        launch_position,
+        scenario["environment"]["launch_azimuth_deg"],
+    )
+    rail_axis = quat_rotate(
+        rail_attitude, np.array([1.0, 0.0, 0.0])
+    )
+    if constrained_to_rail and body.hold_down_released_s is None:
+        gravity_m_s2 = EARTH_MU / float(np.linalg.norm(launch_position)) ** 2
+        release = rail["hold_down_release"]
+        if (
+            thrust_n
+            < float(release["minimum_thrust_to_weight"])
+            * body.mass_kg
+            * gravity_m_s2
+        ):
+            body.position_ecef_m = launch_position.copy()
+            body.velocity_ecef_m_s[:] = 0.0
+            body.attitude_wxyz = rail_attitude
+            body.body_rates_rad_s = quat_rotate(
+                quat_conjugate(rail_attitude),
+                np.array([0.0, 0.0, EARTH_ROTATION_RAD_S]),
+            )
+            _force, aero, _moment = _forces(
+                body,
+                scenario,
+                np.concatenate(
+                    (
+                        body.position_ecef_m,
+                        body.velocity_ecef_m_s,
+                        body.attitude_wxyz,
+                        body.body_rates_rad_s,
+                    )
+                ),
+                thrust_n,
+                tvc_rad,
+                fin_commands,
+                time_s,
+            )
+            body.last_dynamic_pressure_pa = aero.dynamic_pressure_pa
+            body.last_mach = aero.mach
+            body.last_angle_of_attack_deg = aero.angle_of_attack_deg
+            body.aero_valid = aero.valid
+            return aero
+        body.hold_down_released_s = time_s
     state = np.concatenate(
         (
             body.position_ecef_m,
@@ -953,14 +1002,38 @@ def _integrate_body(
     next_state = state + dt_s * (k1 + 2 * k2 + 2 * k3 + k4) / 6.0
     next_state[6:10] = quat_normalize(next_state[6:10])
 
-    rail_length = 12.0
-    relative_altitude = float(
-        np.linalg.norm(next_state[0:3]) - np.linalg.norm(launch_position)
-    )
-    if relative_altitude < rail_length and body.upper_mass_kg > 0.0:
-        axis = quat_rotate(next_state[6:10], np.array([1.0, 0.0, 0.0]))
-        next_state[3:6] = max(float(np.dot(next_state[3:6], axis)), 0.0) * axis
-        next_state[10:13] = 0.0
+    if constrained_to_rail:
+        progress_m = max(
+            float(np.dot(next_state[0:3] - launch_position, rail_axis)),
+            0.0,
+        )
+        normal_acceleration = float(
+            np.linalg.norm(
+                k1[3:6] - np.dot(k1[3:6], rail_axis) * rail_axis
+            )
+        )
+        friction_acceleration = (
+            float(rail["friction_coefficient"]) * normal_acceleration
+        )
+        axial_speed = max(
+            float(np.dot(next_state[3:6], rail_axis))
+            - friction_acceleration * dt_s,
+            0.0,
+        )
+        progress_m = max(
+            progress_m - 0.5 * friction_acceleration * dt_s**2,
+            0.0,
+        )
+        next_state[0:3] = launch_position + progress_m * rail_axis
+        next_state[3:6] = axial_speed * rail_axis
+        next_state[6:10] = rail_attitude
+        next_state[10:13] = quat_rotate(
+            quat_conjugate(rail_attitude),
+            np.array([0.0, 0.0, EARTH_ROTATION_RAD_S]),
+        )
+        last_button_m = min(float(value) for value in rail["button_positions_m"])
+        if progress_m + last_button_m >= float(rail["length_m"]):
+            body.rail_exit_s = time_s + dt_s
 
     body.position_ecef_m = next_state[0:3]
     body.velocity_ecef_m_s = next_state[3:6]
@@ -991,16 +1064,19 @@ def _integrate_body(
 
 def _split_stack(
     integrated_stack: Body, scenario: dict[str, Any]
-) -> tuple[Body, Body]:
+) -> tuple[Body, Body, dict[str, float]]:
     stages = scenario["vehicle"]["stages"]
     axis = quat_rotate(integrated_stack.attitude_wxyz, np.array([1.0, 0.0, 0.0]))
-    impulse = float(scenario["mission"].get("separation_impulse_m_s", 0.8))
+    impulse_ns = float(scenario["mission"]["separation_impulse_ns"])
+    parent_mass = integrated_stack.mass_kg
+    parent_center_m = integrated_stack.center_of_mass_m
+    parent_inertia = integrated_stack.inertia_kg_m2.copy()
     core_stage = Body(
         "core_stage",
         0,
         stages[0],
-        integrated_stack.position_ecef_m - 0.5 * axis,
-        integrated_stack.velocity_ecef_m_s - impulse * axis,
+        integrated_stack.position_ecef_m.copy(),
+        integrated_stack.velocity_ecef_m_s.copy(),
         integrated_stack.attitude_wxyz.copy(),
         integrated_stack.body_rates_rad_s.copy(),
         integrated_stack.fuel_kg,
@@ -1010,14 +1086,121 @@ def _split_stack(
         "upper_stage",
         1,
         stages[1],
-        integrated_stack.position_ecef_m + 0.5 * axis,
-        integrated_stack.velocity_ecef_m_s + impulse * axis,
+        integrated_stack.position_ecef_m.copy(),
+        integrated_stack.velocity_ecef_m_s.copy(),
         integrated_stack.attitude_wxyz.copy(),
         integrated_stack.body_rates_rad_s.copy(),
         float(stages[1]["fuel_mass_kg"]),
         float(stages[1]["oxidizer_mass_kg"]),
     )
-    return core_stage, upper_stage
+    core_offset_body = np.array(
+        [core_stage.center_of_mass_m - parent_center_m, 0.0, 0.0]
+    )
+    upper_offset_body = np.array(
+        [
+            float(stages[0]["length_m"])
+            + upper_stage.center_of_mass_m
+            - parent_center_m,
+            0.0,
+            0.0,
+        ]
+    )
+    earth_rate_body = quat_rotate(
+        quat_conjugate(integrated_stack.attitude_wxyz),
+        np.array([0.0, 0.0, EARTH_ROTATION_RAD_S]),
+    )
+    angular_rate_body = (
+        integrated_stack.body_rates_rad_s - earth_rate_body
+    )
+    core_relative_velocity_body = (
+        cross3(angular_rate_body, core_offset_body)
+        - impulse_ns / core_stage.mass_kg * np.array([1.0, 0.0, 0.0])
+    )
+    upper_relative_velocity_body = (
+        cross3(angular_rate_body, upper_offset_body)
+        + impulse_ns / upper_stage.mass_kg * np.array([1.0, 0.0, 0.0])
+    )
+    core_stage.position_ecef_m += quat_rotate(
+        integrated_stack.attitude_wxyz, core_offset_body
+    )
+    upper_stage.position_ecef_m += quat_rotate(
+        integrated_stack.attitude_wxyz, upper_offset_body
+    )
+    core_stage.velocity_ecef_m_s += quat_rotate(
+        integrated_stack.attitude_wxyz, core_relative_velocity_body
+    )
+    upper_stage.velocity_ecef_m_s += quat_rotate(
+        integrated_stack.attitude_wxyz, upper_relative_velocity_body
+    )
+
+    linear_residual = (
+        core_stage.mass_kg * core_relative_velocity_body
+        + upper_stage.mass_kg * upper_relative_velocity_body
+    )
+    angular_before = parent_inertia * angular_rate_body
+    angular_after = (
+        core_stage.inertia_kg_m2 * angular_rate_body
+        + upper_stage.inertia_kg_m2 * angular_rate_body
+        + cross3(
+            core_offset_body,
+            core_stage.mass_kg * core_relative_velocity_body,
+        )
+        + cross3(
+            upper_offset_body,
+            upper_stage.mass_kg * upper_relative_velocity_body,
+        )
+    )
+    mass_residual = parent_mass - core_stage.mass_kg - upper_stage.mass_kg
+    energy_before_j = 0.5 * float(
+        np.dot(angular_rate_body, angular_before)
+    )
+    energy_after_j = 0.5 * (
+        core_stage.mass_kg * float(np.dot(
+            core_relative_velocity_body, core_relative_velocity_body
+        ))
+        + upper_stage.mass_kg * float(np.dot(
+            upper_relative_velocity_body, upper_relative_velocity_body
+        ))
+        + float(np.dot(
+            angular_rate_body,
+            core_stage.inertia_kg_m2 * angular_rate_body,
+        ))
+        + float(np.dot(
+            angular_rate_body,
+            upper_stage.inertia_kg_m2 * angular_rate_body,
+        ))
+    )
+    energy_delta_j = energy_after_j - energy_before_j
+    expected_energy_j = 0.5 * impulse_ns**2 * (
+        1.0 / core_stage.mass_kg + 1.0 / upper_stage.mass_kg
+    )
+    audit = {
+        "linear_momentum_residual_kg_m_s": float(
+            np.linalg.norm(linear_residual)
+        ),
+        "angular_momentum_residual_kg_m2_s": float(
+            np.linalg.norm(angular_after - angular_before)
+        ),
+        "mass_residual_kg": abs(float(mass_residual)),
+        "separation_energy_delta_j": energy_delta_j,
+        "expected_separation_energy_j": expected_energy_j,
+        "separation_energy_residual_j": abs(
+            energy_delta_j - expected_energy_j
+        ),
+    }
+    assert audit["linear_momentum_residual_kg_m_s"] <= (
+        1e-9 * max(impulse_ns, 1.0)
+    ), f"linear momentum residual: {audit}"
+    assert audit["angular_momentum_residual_kg_m2_s"] <= (
+        1e-9 * max(float(np.linalg.norm(angular_before)), 1.0)
+    ), f"angular momentum residual: {audit}"
+    assert audit["mass_residual_kg"] <= (
+        1e-12 * max(parent_mass, 1.0)
+    ), f"mass residual: {audit}"
+    assert audit["separation_energy_residual_j"] <= (
+        1e-9 * max(expected_energy_j, 1.0)
+    ), f"separation energy residual: {audit}"
+    return core_stage, upper_stage, audit
 
 
 def _telemetry_row(
@@ -1179,6 +1362,7 @@ def run_simulation(
         float(stages[0]["oxidizer_mass_kg"]),
         _stage_total_mass(stages[1]),
         float(stages[0]["length_m"] + stages[1]["length_m"]),
+        stages[1],
     )
     bodies = [integrated_stack]
     cores: dict[str, FlightCore] = {
@@ -1326,7 +1510,9 @@ def run_simulation(
                     FSW_DISCRETE_ACTION_STAGE_SEPARATE,
                 )
             ):
-                core_stage, upper_stage = _split_stack(integrated_stack, scenario)
+                core_stage, upper_stage, separation_audit = _split_stack(
+                    integrated_stack, scenario
+                )
                 integrated_core = cores.pop("integrated_stack")
                 integrated_output = outputs.pop("integrated_stack")
                 integrated_avionics = avionics_runtimes.pop(
@@ -1376,7 +1562,7 @@ def run_simulation(
                         time_s,
                         "integrated_stack",
                         "stage_separation",
-                        "core stage and upper stage created",
+                        json.dumps(separation_audit, sort_keys=True),
                     )
                 )
             current_values: dict[str, tuple[float, float, float]] = {}
@@ -1425,6 +1611,8 @@ def run_simulation(
                     body, output, time_s, dt_s, scenario
                 )
                 was_landed = body.landed
+                was_released = body.hold_down_released_s is not None
+                was_rail_exited = body.rail_exit_s is not None
                 _integrate_body(
                     body,
                     scenario,
@@ -1435,6 +1623,22 @@ def run_simulation(
                     dt_s,
                     launch_position,
                 )
+                if not was_released and body.hold_down_released_s is not None:
+                    events.append(
+                        event(
+                            body.hold_down_released_s,
+                            body.name,
+                            "hold_down_released",
+                        )
+                    )
+                if not was_rail_exited and body.rail_exit_s is not None:
+                    events.append(
+                        event(
+                            body.rail_exit_s,
+                            body.name,
+                            "rail_exit",
+                        )
+                    )
                 if body.landed and not was_landed:
                     events.append(event(time_s, body.name, "landed"))
                 current_values[body.name] = (thrust, pressure, temperature)
