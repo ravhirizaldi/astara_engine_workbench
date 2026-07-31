@@ -426,8 +426,21 @@ def validate_scenario(scenario: dict[str, Any]) -> None:
         )
 
     avionics = scenario.get("avionics", {})
+    modeled_devices = (
+        "air_data_computer",
+        "engine_controller",
+        "discrete_input_module",
+        "recovery_controller",
+        "flight_computer_platform",
+    )
     expected_subsystems = {
-        "devices": ("imu", "magnetometer", "barometer", "gnss"),
+        "devices": (
+            "imu",
+            "magnetometer",
+            "barometer",
+            "gnss",
+            *modeled_devices,
+        ),
         "tasks": ("fsw",),
         "buses": ("sensor_bus",),
     }
@@ -478,6 +491,68 @@ def validate_scenario(scenario: dict[str, Any]) -> None:
                 raise ValueError(
                     f"{prefix}.drop_on_deadline_miss must be boolean"
                 )
+    model_fields = {
+        "quantization",
+        "valid",
+        "timeout_s",
+        "noise_stddev",
+        "accuracy",
+        "startup_delay_s",
+        "reset_behavior",
+        "command_acknowledgment",
+        "command_ack_delay_s",
+    }
+    for name in modeled_devices:
+        profile = avionics["devices"][name]
+        prefix = f"avionics.devices.{name}"
+        missing = model_fields - profile.keys()
+        if missing:
+            raise ValueError(
+                f"{prefix} is missing {', '.join(sorted(missing))}"
+            )
+        for field in (
+            "quantization",
+            "timeout_s",
+            "noise_stddev",
+            "accuracy",
+            "startup_delay_s",
+            "command_ack_delay_s",
+        ):
+            value = profile[field]
+            if (
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(value)
+            ):
+                raise ValueError(f"{prefix}.{field} must be finite and numeric")
+        if float(profile["quantization"]) < 0.0:
+            raise ValueError(f"{prefix}.quantization must be nonnegative")
+        if float(profile["timeout_s"]) <= 0.0:
+            raise ValueError(f"{prefix}.timeout_s must be positive")
+        for field in (
+            "noise_stddev",
+            "startup_delay_s",
+            "command_ack_delay_s",
+        ):
+            if float(profile[field]) < 0.0:
+                raise ValueError(f"{prefix}.{field} must be nonnegative")
+        if not 0.0 <= float(profile["accuracy"]) <= 1.0:
+            raise ValueError(f"{prefix}.accuracy must be from 0 to 1")
+        if not isinstance(profile["valid"], bool):
+            raise ValueError(f"{prefix}.valid must be boolean")
+        if profile["reset_behavior"] not in {"invalidate", "hold_last"}:
+            raise ValueError(
+                f"{prefix}.reset_behavior must be invalidate or hold_last"
+            )
+        if profile["command_acknowledgment"] not in {
+            "immediate",
+            "delayed",
+            "drop",
+        }:
+            raise ValueError(
+                f"{prefix}.command_acknowledgment must be "
+                "immediate, delayed, or drop"
+            )
     for device, rate_name in (
         ("imu", "imu_rate_hz"),
         ("magnetometer", "magnetometer_rate_hz"),

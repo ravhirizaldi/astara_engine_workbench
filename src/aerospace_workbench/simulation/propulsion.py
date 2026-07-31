@@ -56,6 +56,22 @@ def thrust_ramp(time_since_start: float, burn_duration: float) -> float:
     )
 
 
+def _record_engine_parameters(
+    body: Any,
+    propulsion: dict[str, Any],
+    thrust_n: float,
+    chamber_pressure_pa: float,
+    temperature_k: float,
+) -> tuple[float, float, float]:
+    body.last_chamber_pressure_pa = chamber_pressure_pa
+    body.last_engine_temperature_k = temperature_k
+    nominal_pressure = max(float(propulsion["chamber_pressure_pa"]), 1.0)
+    body.last_engine_rpm = 30_000.0 * math.sqrt(
+        max(chamber_pressure_pa / nominal_pressure, 0.0)
+    )
+    return thrust_n, chamber_pressure_pa, temperature_k
+
+
 def propulsion_step(
     body: Any,
     output: FswOutput,
@@ -81,7 +97,7 @@ def propulsion_step(
     elapsed = time_s - start
     duration = float(propulsion["burn_duration_s"])
     if not should_burn or elapsed < 0.0 or elapsed >= duration:
-        return 0.0, 0.0, 293.15
+        return _record_engine_parameters(body, propulsion, 0.0, 0.0, 293.15)
     curve = propulsion.get("performance_curve")
     if curve:
         times = [row["time_s"] for row in curve]
@@ -159,7 +175,7 @@ def propulsion_step(
         thrust_scales[engine["id"]] = thrust_scale
 
     if flow_scale <= 0.0:
-        return 0.0, 0.0, 293.15
+        return _record_engine_parameters(body, propulsion, 0.0, 0.0, 293.15)
 
     requested_fuel_flow = base_fuel_flow * flow_scale
     requested_oxidizer_flow = base_oxidizer_flow * flow_scale
@@ -189,4 +205,6 @@ def propulsion_step(
         body.engine_health_percent
         - dt_s * (0.08 + pressure_over**2 + temperature_over**2),
     )
-    return thrust, chamber_pressure, temperature
+    return _record_engine_parameters(
+        body, propulsion, thrust, chamber_pressure, temperature
+    )

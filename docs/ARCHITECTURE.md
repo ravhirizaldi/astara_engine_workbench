@@ -23,25 +23,28 @@ Scenario + Vehicle
 6-DOF Truth Model --> truth.csv
         |
         v
-Sensor Emulator --> DeviceScheduler --> BusScheduler --> avionics.csv
-                            |                |
-                            +----------------+--> sensors.csv.gz --+
-Command Schedule --> commands.csv ----+--> typed FswInput --> C++ Flight Core
-Truth-derived adapters ----------------+                         |
-                                                                 +--> fsw.csv
-                                                                 |
-                                                                 v
-                                                        Actuator Emulator
-                                                                 |
-                                                                 +--> Truth Model
+Navigation + supporting device models --> DeviceScheduler --> BusScheduler
+        ^                                      |                    |
+        |                                      +--------------------+--> avionics.csv
+Command Schedule --> FlightComputerPlatformModel                    |
+                                                                   v
+                                                    typed FswInput --> C++ Flight Core
+                                                           |                 |
+                                                           v                 +--> fsw.csv
+                                                    sensors.csv.gz           |
+                                                                             v
+                                                                    Actuator Emulator
+                                                                             |
+                                                                             +--> Truth Model
 ```
 
 `truth.csv`, `avionics.csv`, `sensors.csv.gz`, `commands.csv`, and `fsw.csv`
 are deliberately separate. Flight software receives only the versioned
 `FswInput` ABI. The
-Python bridge maps recorded sensor channels plus typed air-data, propulsion,
-recovery-feedback, command, and platform-timing fields, so recorded inputs can
-replace the simulator through `awb replay`.
+Python bridge maps bus-received navigation channels plus air-data, propulsion,
+discrete/recovery-feedback, command, and platform device samples. No live
+simulation truth field is packaged directly into `FswInput`; recorded inputs
+can still replace the simulator through `awb replay`.
 
 The sensor suite accepts up to three timestamped accelerometer/gyro,
 magnetometer, barometer, and GNSS channels. Magnetometer health is independent

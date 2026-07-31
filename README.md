@@ -18,7 +18,7 @@ generation.
 | Vehicle dynamics | ECEF translation, body quaternions, rotating Earth, gravity, atmosphere, wind, rigid-body rotation, staging, and recovery | `truth.csv` |
 | Vehicle definition | Two stages, engine clusters, tabulated propulsion, mass properties, aerodynamic coefficients, fixed or movable fins, sensors, and actuators | `vehicle_definition.json` |
 | Mission definition | Launch environment, command schedule, event-triggered separation and ignition, guidance schedule, faults, and uncertainty | `scenario.json`, `events.csv` |
-| Avionics simulation | Independently clocked IMU, magnetometer, barometer, GNSS, sensor-bus, and FSW tasks with drift, jitter, processing/publication delays, and deadline drops | `avionics.csv`, `sensors.csv.gz` |
+| Avionics simulation | Independently clocked navigation sensors, air-data computer, engine controller, discrete/recovery modules, flight-computer platform, bus, and FSW task with latency, quantization, startup/reset behavior, faults, and deadline drops | `avionics.csv`, `sensors.csv.gz` |
 | Flight software | C++17 mission logic, ECEF navigation, guidance, sensor voting, fault handling, TVC/fin commands, recovery sequencing, and health reporting | `fsw.csv` |
 | Replay | Recorded sensor channels and commands replay through the same C++ flight core | `fsw_replay.csv` |
 | Analysis | Timestep convergence, seeded Monte Carlo, retained failure runs, percentile summaries, and optional RocketPy comparison | `convergence.csv`, `monte_carlo.csv`, `summary.json` |

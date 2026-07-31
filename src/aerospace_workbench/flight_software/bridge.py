@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import math
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -107,6 +108,16 @@ FSW_SENSOR_DIAGNOSTIC_FIELDS = (
         for channel in range(FSW_MAX_SENSOR_CHANNELS)
     ),
 )
+
+
+@dataclass(frozen=True)
+class FswDeviceInputs:
+    air_data: FswAirDataSample
+    propulsion: FswPropulsionStatus
+    discretes: FswDiscreteInputs
+    platform: FswPlatformStatus
+    command_type: int = FSW_COMMAND_NONE
+    command_issue_time_s: float = 0.0
 
 
 def fsw_sensor_diagnostics_to_row(
@@ -297,8 +308,10 @@ def sensor_suite_from_frames(
 def fsw_input_from_frame(
     frame: SensorFrame,
     *,
+    device_inputs: FswDeviceInputs | None = None,
     command_type: int = FSW_COMMAND_NONE,
     command_sequence: int = 0,
+    command_issue_time_s: float | None = None,
     propulsion_ready: bool | None = None,
     propulsion_running: bool | None = None,
     drogue_deployed: bool | None = None,
@@ -311,6 +324,17 @@ def fsw_input_from_frame(
     input_frame.abi_version = FSW_ABI_VERSION
     input_frame.struct_size = ctypes.sizeof(FswInput)
     input_frame.sensors = sensor_suite_from_frame(frame)
+    if device_inputs is not None:
+        input_frame.air_data = device_inputs.air_data
+        input_frame.propulsion = device_inputs.propulsion
+        input_frame.discretes = device_inputs.discretes
+        input_frame.platform = device_inputs.platform
+        input_frame.command = FswCommand(
+            command_sequence,
+            device_inputs.command_issue_time_s,
+            command_type,
+        )
+        return input_frame
     input_frame.air_data = FswAirDataSample(
         frame.dynamic_pressure_pa,
         frame.time_s,
@@ -357,7 +381,7 @@ def fsw_input_from_frame(
     )
     input_frame.command = FswCommand(
         command_sequence,
-        frame.time_s,
+        frame.time_s if command_issue_time_s is None else command_issue_time_s,
         command_type,
     )
     return input_frame
@@ -407,6 +431,7 @@ class FlightCore:
                 f"flight core accepts at most {FSW_MAX_GUIDANCE_POINTS} guidance points"
             )
         sensors = scenario["sensors"]
+        devices = scenario["avionics"]["devices"]
         accelerometer_noise = float(sensors["accelerometer_noise_m_s2"])
         gyro_noise = float(sensors["gyro_noise_rad_s"])
         barometer_noise = float(sensors["barometer_noise_m"])
@@ -460,25 +485,19 @@ class FlightCore:
             )
         )
         config.air_data_timeout_s = float(
-            sensors.get("air_data_timeout_s", config.imu_timeout_s)
+            devices["air_data_computer"]["timeout_s"]
         )
         config.propulsion_status_timeout_s = float(
-            sensors.get(
-                "propulsion_status_timeout_s",
-                config.imu_timeout_s,
-            )
+            devices["engine_controller"]["timeout_s"]
         )
         config.discrete_feedback_timeout_s = float(
-            sensors.get(
-                "discrete_feedback_timeout_s",
-                config.imu_timeout_s,
+            max(
+                devices["discrete_input_module"]["timeout_s"],
+                devices["recovery_controller"]["timeout_s"],
             )
         )
         config.platform_status_timeout_s = float(
-            sensors.get(
-                "platform_status_timeout_s",
-                config.imu_timeout_s,
-            )
+            devices["flight_computer_platform"]["timeout_s"]
         )
         config.max_voter_sample_skew_s = float(
             sensors.get("max_voter_sample_skew_s", 0.01)
@@ -616,11 +635,31 @@ class FlightCore:
         self._previous_execution_time_s = 0.0
         self._loop_deadline_s = config.loop_deadline_s
 
+    @property
+    def previous_execution_time_s(self) -> float:
+        return self._previous_execution_time_s
+
+    @property
+    def loop_deadline_s(self) -> float:
+        return self._loop_deadline_s
+
+    def next_scheduled_command(self, time_s: float) -> tuple[int, float] | None:
+        if self._scheduled_command_index >= len(self._scheduled_commands):
+            return None
+        command_time, command_type = self._scheduled_commands[
+            self._scheduled_command_index
+        ]
+        if time_s + 1e-12 < command_time:
+            return None
+        self._scheduled_command_index += 1
+        return command_type, command_time
+
     def step(
         self,
         sensor: SensorFrame,
         *,
         command_type: int | None = None,
+        device_inputs: FswDeviceInputs | None = None,
         propulsion_ready: bool | None = None,
         propulsion_running: bool | None = None,
         drogue_deployed: bool | None = None,
@@ -633,14 +672,13 @@ class FlightCore:
         output = FswOutput()
         command_sequence = 0
         if command_type is None:
-            command_type = FSW_COMMAND_NONE
-            if self._scheduled_command_index < len(self._scheduled_commands):
-                command_time, scheduled_type = self._scheduled_commands[
-                    self._scheduled_command_index
-                ]
-                if sensor.time_s + 1e-12 >= command_time:
-                    command_type = scheduled_type
-                    self._scheduled_command_index += 1
+            if device_inputs is not None:
+                command_type = device_inputs.command_type
+            else:
+                scheduled = self.next_scheduled_command(sensor.time_s)
+                command_type = (
+                    FSW_COMMAND_NONE if scheduled is None else scheduled[0]
+                )
         if command_type != FSW_COMMAND_NONE:
             command_sequence = self._next_command_sequence
             self._next_command_sequence += 1
@@ -651,6 +689,7 @@ class FlightCore:
         )
         input_frame = fsw_input_from_frame(
             sensor,
+            device_inputs=device_inputs,
             command_type=command_type,
             command_sequence=command_sequence,
             propulsion_ready=propulsion_ready,

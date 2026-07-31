@@ -36,15 +36,22 @@ from ..flight_software.abi import (
     FSW_DISCRETE_ACTION_DEPLOY_DROGUE,
     FSW_DISCRETE_ACTION_DEPLOY_MAIN,
     FSW_DISCRETE_ACTION_STAGE_SEPARATE,
+    FSW_COMMAND_NONE,
     MODE_NAMES,
     NAVIGATION_STATUS_NAMES,
+    FswAirDataSample,
+    FswDiscreteInputs,
+    FswDiscreteSample,
     FswOutput,
+    FswPlatformStatus,
+    FswPropulsionStatus,
     SensorFrame,
     decode_faults,
 )
 from ..flight_software.bridge import (
     SENSOR_CSV_FIELDS,
     FlightCore,
+    FswDeviceInputs,
     fsw_sensor_diagnostics_to_row,
     sensor_frame_to_row,
 )
@@ -74,6 +81,13 @@ from ..mathematics.vectors import (
     unit,
 )
 from .events import event, flight_mode_events
+from .device_models import (
+    AirDataComputerModel,
+    DiscreteInputModule,
+    EngineControllerModel,
+    FlightComputerPlatformModel,
+    RecoveryControllerModel,
+)
 from .actuators import (
     actuator_commands as _actuator_commands,
     consume_discrete_actuation as _consume_discrete_actuation,
@@ -119,6 +133,14 @@ AVIONICS_CSV_FIELDS = (
     "fsw_receive_time_s",
 )
 
+DEVICE_MODEL_TYPES = {
+    "air_data_computer": AirDataComputerModel,
+    "engine_controller": EngineControllerModel,
+    "discrete_input_module": DiscreteInputModule,
+    "recovery_controller": RecoveryControllerModel,
+    "flight_computer_platform": FlightComputerPlatformModel,
+}
+
 
 @dataclass
 class _AvionicsRuntime:
@@ -128,9 +150,13 @@ class _AvionicsRuntime:
     tasks: TaskScheduler
     bus: BusScheduler
     received: list[dict[str, Any]]
+    models: dict[str, Any]
+    received_devices: dict[str, dict[str, Any]]
     timeline: list[dict[str, Any]]
     record_timeline: bool
     last_task_time_s: float | None = None
+    last_deadline_missed: bool = False
+    reported_execution_time_s: float = 0.0
 
 
 def _scheduler_seed(seed: int, body_name: str, subsystem: str) -> int:
@@ -147,6 +173,7 @@ def _avionics_runtime(
     start_s: float,
     timeline: list[dict[str, Any]],
     initial_received: list[dict[str, Any]] | None = None,
+    initial_device_received: dict[str, dict[str, Any]] | None = None,
     record_timeline: bool = True,
 ) -> _AvionicsRuntime:
     queue = EventQueue()
@@ -160,6 +187,14 @@ def _avionics_runtime(
             _scheduler_seed(seed, body_name, name),
         )
         devices.start(name, start_s)
+    models = {
+        name: model_type(
+            avionics["devices"][name],
+            _scheduler_seed(seed, body_name, f"{name}:model"),
+            float(avionics["devices"][name]["reset_epoch_s"]),
+        )
+        for name, model_type in DEVICE_MODEL_TYPES.items()
+    }
     tasks.add(
         "fsw",
         TimingProfile.from_mapping(avionics["tasks"]["fsw"]),
@@ -186,6 +221,12 @@ def _avionics_runtime(
                     int(scenario["sensors"].get("channel_count", 1))
                 )
             ]
+        ),
+        models,
+        (
+            copy.deepcopy(initial_device_received)
+            if initial_device_received is not None
+            else {}
         ),
         timeline,
         record_timeline,
@@ -442,7 +483,6 @@ def _frame_from_values(
     separated: bool,
     values: dict[str, Any],
 ) -> SensorFrame:
-    sensors = scenario["sensors"]
     gnss_position = np.asarray(
         values.get("gnss_position_ecef_m", np.zeros(3))
     )
@@ -451,25 +491,6 @@ def _frame_from_values(
     )
     up = unit(body.position_ecef_m)
     vertical_velocity = float(np.dot(gnss_velocity, up))
-    dynamic_pressure = max(
-        0.0,
-        body.last_dynamic_pressure_pa
-        + float(rng.normal(0.0, sensors.get("dynamic_pressure_noise_pa", 0.0))),
-    )
-    engine_health = min(
-        100.0,
-        max(
-            0.0,
-            body.engine_health_percent
-            + float(rng.normal(0.0, sensors.get("engine_health_noise_percent", 0.0))),
-        ),
-    )
-    propulsion_running = (
-        body.engine_started_s is not None
-        and time_s
-            < body.engine_started_s
-                + float(body.stage["propulsion"]["burn_duration_s"])
-    )
     return SensorFrame(
         time_s,
         dt_s,
@@ -484,23 +505,136 @@ def _frame_from_values(
         (ctypes.c_double * 3)(*gnss_position),
         (ctypes.c_double * 3)(*gnss_velocity),
         vertical_velocity,
-        dynamic_pressure,
-        engine_health,
+        0.0,
+        0.0,
         int(values.get("gnss_valid", 0)),
         int(values.get("barometer_valid", 0)),
-        int(separated),
+        0,
         float(values.get("barometer_sample_time_s", 0.0)),
         float(values.get("gnss_sample_time_s", 0.0)),
-        int(engine_health > 0.0),
-        int(propulsion_running),
-        int(body.drogue_deployed),
-        int(body.main_deployed),
+        0,
+        0,
+        0,
+        0,
         float(values.get("imu_sample_time_s", 0.0)),
         float(values.get("magnetometer_sample_time_s", 0.0)),
         int(values.get("accel_valid", 0)),
         int(values.get("gyro_valid", 0)),
         int(values.get("magnetometer_valid", 0)),
     )
+
+
+def _sample_device_model(
+    core: FlightCore,
+    body: Body,
+    scenario: dict[str, Any],
+    avionics: _AvionicsRuntime,
+    name: str,
+    sample_time_s: float,
+) -> dict[str, Any]:
+    model = avionics.models[name]
+    fault = _fault_active(scenario, body.name, name, sample_time_s)
+    if isinstance(model, FlightComputerPlatformModel):
+        return model.sample(
+            sample_time_s,
+            avionics.reported_execution_time_s,
+            avionics.last_deadline_missed,
+            True,
+            core.next_scheduled_command(sample_time_s),
+            fault,
+        )
+    return model.sample(body, sample_time_s, fault)
+
+
+def _fresh_device_sample(
+    avionics: _AvionicsRuntime,
+    name: str,
+    time_s: float,
+) -> dict[str, Any]:
+    sample = dict(avionics.received_devices.get(name, {}))
+    sample_time_s = float(sample.get("sample_time_s", 0.0))
+    age_s = time_s - sample_time_s
+    sample["valid"] = int(
+        bool(sample.get("valid", 0))
+        and -1e-12 <= age_s <= avionics.models[name].timeout_s + 1e-12
+    )
+    return sample
+
+
+def _device_inputs(
+    avionics: _AvionicsRuntime,
+    time_s: float,
+) -> FswDeviceInputs:
+    air = _fresh_device_sample(avionics, "air_data_computer", time_s)
+    engine = _fresh_device_sample(avionics, "engine_controller", time_s)
+    discrete = _fresh_device_sample(avionics, "discrete_input_module", time_s)
+    recovery = _fresh_device_sample(avionics, "recovery_controller", time_s)
+    platform = _fresh_device_sample(
+        avionics, "flight_computer_platform", time_s
+    )
+    command_type = (
+        int(platform.get("command_type", FSW_COMMAND_NONE))
+        if platform["valid"]
+        else FSW_COMMAND_NONE
+    )
+    if command_type != FSW_COMMAND_NONE:
+        avionics.received_devices["flight_computer_platform"][
+            "command_type"
+        ] = FSW_COMMAND_NONE
+    return FswDeviceInputs(
+        FswAirDataSample(
+            float(air.get("dynamic_pressure_pa", 0.0)),
+            float(air.get("sample_time_s", 0.0)),
+            air["valid"],
+        ),
+        FswPropulsionStatus(
+            float(engine.get("health_percent", 0.0)),
+            float(engine.get("sample_time_s", 0.0)),
+            engine["valid"],
+            int(engine.get("ready", 0)),
+            int(engine.get("running", 0)),
+        ),
+        FswDiscreteInputs(
+            FswDiscreteSample(
+                float(discrete.get("sample_time_s", 0.0)),
+                discrete["valid"],
+                int(discrete.get("stage_separated", 0)),
+            ),
+            FswDiscreteSample(
+                float(recovery.get("sample_time_s", 0.0)),
+                recovery["valid"],
+                int(recovery.get("drogue_deployed", 0)),
+            ),
+            FswDiscreteSample(
+                float(recovery.get("sample_time_s", 0.0)),
+                recovery["valid"],
+                int(recovery.get("main_deployed", 0)),
+            ),
+        ),
+        FswPlatformStatus(
+            float(platform.get("sample_time_s", 0.0)),
+            float(platform.get("previous_execution_time_s", 0.0)),
+            platform["valid"],
+            int(platform.get("deadline_missed", 0)),
+            int(platform.get("watchdog_healthy", 0)),
+        ),
+        command_type,
+        float(platform.get("command_issue_time_s", time_s)),
+    )
+
+
+def _apply_device_inputs(
+    frames: list[SensorFrame],
+    inputs: FswDeviceInputs,
+) -> None:
+    for frame in frames:
+        frame.dynamic_pressure_pa = inputs.air_data.dynamic_pressure_pa
+        frame.engine_health_percent = inputs.propulsion.health_percent
+        frame.propulsion_ready = inputs.propulsion.ready
+        frame.propulsion_running = inputs.propulsion.running
+        frame.stage_separated = inputs.discretes.stage_separated.asserted
+        frame.drogue_deployed = inputs.discretes.drogue_deployed.asserted
+        frame.main_deployed = inputs.discretes.main_deployed.asserted
 
 
 def _run_fsw_substeps(
@@ -531,25 +665,34 @@ def _run_fsw_substeps(
     while scheduled := avionics.queue.pop_due(time_s):
         if scheduled.kind == "device_sample":
             avionics.devices.released(scheduled)
-            measurements = [
-                _sample_device(
-                    body,
-                    scenario,
-                    rng,
-                    scheduled.truth_time_s,
-                    launch_position,
-                    channel,
-                    scheduled.subsystem,
-                )
-                for channel in range(len(avionics.received))
-            ]
             payload = {
                 "body": body.name,
                 "device": scheduled.subsystem,
                 "truth_time_s": time_s,
                 "sensor_sample_time_s": scheduled.truth_time_s,
-                "measurements": measurements,
             }
+            if scheduled.subsystem in avionics.models:
+                payload["measurement"] = _sample_device_model(
+                    core,
+                    body,
+                    scenario,
+                    avionics,
+                    scheduled.subsystem,
+                    scheduled.truth_time_s,
+                )
+            else:
+                payload["measurements"] = [
+                    _sample_device(
+                        body,
+                        scenario,
+                        rng,
+                        scheduled.truth_time_s,
+                        launch_position,
+                        channel,
+                        scheduled.subsystem,
+                    )
+                    for channel in range(len(avionics.received))
+                ]
             if avionics.devices.complete(scheduled, payload) is None:
                 _record_avionics_timeline(
                     avionics, payload, scheduled.subsystem
@@ -572,16 +715,22 @@ def _run_fsw_substeps(
         elif scheduled.kind == "bus_publish":
             avionics.bus.published(scheduled)
         elif scheduled.kind == "bus_receive":
-            for received, measurement in zip(
-                avionics.received,
-                scheduled.payload["measurements"],
-                strict=True,
-            ):
-                received.update(measurement)
+            device = str(scheduled.payload["device"])
+            if device in avionics.models:
+                avionics.received_devices[device] = dict(
+                    scheduled.payload["measurement"]
+                )
+            else:
+                for received, measurement in zip(
+                    avionics.received,
+                    scheduled.payload["measurements"],
+                    strict=True,
+                ):
+                    received.update(measurement)
             _record_avionics_timeline(
                 avionics,
                 scheduled.payload,
-                str(scheduled.payload["device"]),
+                device,
             )
         elif scheduled.kind == "task_release":
             avionics.tasks.released(scheduled)
@@ -598,18 +747,13 @@ def _run_fsw_substeps(
                 )
                 for received in avionics.received
             ]
-            propulsion = body.stage["propulsion"]
-            propulsion_running = (
-                body.engine_started_s is not None
-                and scheduled.truth_time_s
-                < body.engine_started_s
-                + float(propulsion["burn_duration_s"])
-            )
+            inputs = _device_inputs(avionics, scheduled.truth_time_s)
+            _apply_device_inputs(frames, inputs)
             avionics.tasks.complete(
                 scheduled,
                 {
                     "frames": frames,
-                    "propulsion_running": propulsion_running,
+                    "device_inputs": inputs,
                 },
             )
         elif scheduled.kind == "task_complete":
@@ -621,35 +765,31 @@ def _run_fsw_substeps(
             )
             completed_output = core.step(
                 frames[0],
-                propulsion_running=scheduled.payload["propulsion_running"],
-                drogue_deployed=body.drogue_deployed,
-                main_deployed=body.main_deployed,
-                previous_execution_time_s=timing_override_s,
-                deadline_missed=deadline_missed,
+                device_inputs=scheduled.payload["device_inputs"],
                 sensor_channels=frames[1:],
+            )
+            avionics.reported_execution_time_s = (
+                core.previous_execution_time_s
+                if timing_override_s is None
+                else timing_override_s
+            )
+            avionics.last_deadline_missed = bool(
+                deadline_missed
+                if deadline_missed is not None
+                else (
+                    avionics.reported_execution_time_s
+                    > core.loop_deadline_s
+                )
             )
             avionics.last_task_time_s = float(
                 scheduled.payload["task_release_time_s"]
             )
             completed_shadow = shadow_output
             if shadow_core is not None:
-                shadow_frames = frames
-                if completed_output.stage_separate:
-                    shadow_frames = [
-                        SensorFrame.from_buffer_copy(item) for item in frames
-                    ]
-                    for item in shadow_frames:
-                        item.stage_separated = 1
                 completed_shadow = shadow_core.step(
-                    shadow_frames[0],
-                    propulsion_running=scheduled.payload[
-                        "propulsion_running"
-                    ],
-                    drogue_deployed=body.drogue_deployed,
-                    main_deployed=body.main_deployed,
-                    previous_execution_time_s=timing_override_s,
-                    deadline_missed=deadline_missed,
-                    sensor_channels=shadow_frames[1:],
+                    frames[0],
+                    device_inputs=scheduled.payload["device_inputs"],
+                    sensor_channels=frames[1:],
                 )
             if on_sensor:
                 on_sensor(body.name, frames, completed_output)
@@ -1215,7 +1355,14 @@ def run_simulation(
                         ),
                         avionics_timeline,
                         integrated_avionics.received,
+                        integrated_avionics.received_devices,
                         record_timeline=not summary_only,
+                    )
+                    runtime.reported_execution_time_s = (
+                        integrated_avionics.reported_execution_time_s
+                    )
+                    runtime.last_deadline_missed = (
+                        integrated_avionics.last_deadline_missed
                     )
                     avionics_runtimes[branch] = runtime
                     all_avionics_runtimes.append(runtime)

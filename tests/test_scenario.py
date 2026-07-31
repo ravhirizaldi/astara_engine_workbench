@@ -141,6 +141,19 @@ class ScenarioTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "flight-software period"):
             validate_scenario(scenario)
 
+    def test_rejects_incomplete_device_models(self) -> None:
+        scenario = default_scenario()
+        del scenario["avionics"]["devices"]["engine_controller"]["timeout_s"]
+        with self.assertRaisesRegex(ValueError, "timeout_s"):
+            validate_scenario(scenario)
+
+        scenario = default_scenario()
+        scenario["avionics"]["devices"]["recovery_controller"][
+            "command_acknowledgment"
+        ] = "wishful"
+        with self.assertRaisesRegex(ValueError, "command_acknowledgment"):
+            validate_scenario(scenario)
+
     def test_rejects_arbitrary_stage_count(self) -> None:
         scenario = default_scenario()
         scenario["vehicle"]["stages"].append(copy.deepcopy(scenario["vehicle"]["stages"][1]))

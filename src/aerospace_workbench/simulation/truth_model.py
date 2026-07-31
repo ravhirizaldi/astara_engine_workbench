@@ -41,6 +41,9 @@ class Body:
     last_tvc_rad: np.ndarray = field(default_factory=lambda: np.zeros(2))
     last_fin_rad: np.ndarray = field(default_factory=lambda: np.zeros(3))
     last_engine_thrusts_n: dict[str, float] = field(default_factory=dict)
+    last_chamber_pressure_pa: float = 0.0
+    last_engine_temperature_k: float = 293.15
+    last_engine_rpm: float = 0.0
 
     @property
     def mass_kg(self) -> float:

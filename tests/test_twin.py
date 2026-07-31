@@ -63,6 +63,17 @@ class TwinTests(unittest.TestCase):
         )
 
         self.assertEqual(first.avionics_timeline, second.avionics_timeline)
+        self.assertTrue(
+            {
+                "air_data_computer",
+                "engine_controller",
+                "discrete_input_module",
+                "recovery_controller",
+                "flight_computer_platform",
+            }.issubset(
+                {row["subsystem"] for row in first.avionics_timeline}
+            )
+        )
         gnss = next(
             row
             for row in first.avionics_timeline
