@@ -127,12 +127,16 @@ void process_command(
             context.control.command_result = FSW_COMMAND_ACCEPTED;
             return;
         case FSW_COMMAND_CLEAR_FAULTS:
-            if (context.mission.mode != FSW_MODE_SAFE) {
+            if (
+                context.mission.mode != FSW_MODE_SAFE
+                && context.mission.mode != FSW_MODE_INTERSTAGE
+            ) {
                 context.control.command_result =
                     FSW_COMMAND_REJECTED_INVALID_STATE;
                 return;
             }
-            context.faults.latched_fault_flags &= critical_fault_mask();
+            context.faults.latched_fault_flags &=
+                context.faults.active_fault_flags;
             context.control.command_result = FSW_COMMAND_ACCEPTED;
             return;
         default:

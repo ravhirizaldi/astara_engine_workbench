@@ -25,6 +25,7 @@ void populate_output(const Context& context, FswOutput& output) {
     output.navigation_status = context.navigation.navigation_status;
     output.stage1_ignite = context.control.stage1_ignite_request;
     output.stage2_ignite = context.control.stage2_ignite_request;
+    output.stage2_shutdown = context.control.stage2_shutdown_request;
     output.discrete_actuation = context.mission.discrete_actuation;
     output.stage_separate =
         context.mission.discrete_actuation.valid
@@ -38,6 +39,10 @@ void populate_output(const Context& context, FswOutput& output) {
         context.mission.discrete_actuation.valid
         && context.mission.discrete_actuation.action
             == FSW_DISCRETE_ACTION_DEPLOY_MAIN;
+    output.deploy_payload =
+        context.mission.discrete_actuation.valid
+        && context.mission.discrete_actuation.action
+            == FSW_DISCRETE_ACTION_DEPLOY_PAYLOAD;
     output.abort = context.mission.mode == FSW_MODE_ABORT;
     output.attitude_valid = context.navigation.attitude_valid;
     output.command_sequence = context.control.command_sequence;

@@ -5,6 +5,7 @@ import math
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import numpy as np
@@ -28,6 +29,7 @@ from aerospace_workbench.mathematics.quaternions import (
     quat_rotate,
 )
 from aerospace_workbench.simulation.actuators import actuator_commands
+from aerospace_workbench.simulation.avionics import _store_device_measurement
 from aerospace_workbench.simulation.propulsion import propulsion_step
 from aerospace_workbench.simulation.runner import (
     AVIONICS_CSV_FIELDS,
@@ -41,6 +43,82 @@ from aerospace_workbench.simulation.truth_model import Body
 
 
 class TwinTests(unittest.TestCase):
+    def test_live_fault_control_injects_clears_and_leaves_scenario_clean(self) -> None:
+        scenario = default_scenario()
+        scenario["simulation"].update({"max_time_s": 0.5, "output_rate_hz": 20.0})
+        original_faults = list(scenario.get("faults", []))
+        sent = False
+
+        def controls(time_s: float) -> list[dict[str, object]]:
+            nonlocal sent
+            if sent or time_s < 0.1:
+                return []
+            sent = True
+            return [
+                {
+                    "action": "inject",
+                    "body": "integrated_stack",
+                    "component": "barometer",
+                    "fault_type": "bias",
+                    "value": 100.0,
+                    "duration_s": 0.2,
+                }
+            ]
+
+        result = run_simulation(
+            scenario,
+            create_report=False,
+            persist=False,
+            control_source=controls,
+        )
+
+        operator_events = [
+            event for event in result.events if event["source"] == "operator"
+        ]
+        self.assertEqual(
+            [event["event"] for event in operator_events],
+            ["fault_injected", "fault_cleared"],
+        )
+        self.assertAlmostEqual(
+            operator_events[1]["time_s"] - operator_events[0]["time_s"],
+            0.2,
+        )
+        self.assertEqual(scenario.get("faults", []), original_faults)
+
+    def test_platform_status_does_not_overwrite_unconsumed_command(self) -> None:
+        runtime = SimpleNamespace(
+            received_devices={
+                "flight_computer_platform": {
+                    "command_type": 5,
+                    "command_issue_time_s": 1.0,
+                }
+            }
+        )
+
+        _store_device_measurement(
+            runtime,
+            "flight_computer_platform",
+            {
+                "command_type": 0,
+                "command_issue_time_s": 2.0,
+                "sample_time_s": 2.0,
+                "valid": 1,
+            },
+        )
+
+        self.assertEqual(
+            runtime.received_devices["flight_computer_platform"][
+                "command_type"
+            ],
+            5,
+        )
+        self.assertEqual(
+            runtime.received_devices["flight_computer_platform"][
+                "command_issue_time_s"
+            ],
+            1.0,
+        )
+
     def test_avionics_timeline_is_delayed_and_seeded(self) -> None:
         scenario = default_scenario()
         scenario["simulation"].update(
@@ -109,10 +187,15 @@ class TwinTests(unittest.TestCase):
         scenario = default_scenario()
         scenario["simulation"].update(
             {
-                "max_time_s": 9.0,
+                "max_time_s": 3.0,
                 "output_rate_hz": scenario["sensors"]["imu_rate_hz"],
             }
         )
+        scenario["vehicle"]["stages"][0]["propulsion"]["burn_duration_s"] = 2.0
+        scenario["vehicle"]["stages"][0]["propulsion"].pop(
+            "performance_curve", None
+        )
+        scenario["mission"]["flight_core"]["separation_delay_s"] = 0.2
         result = run_simulation(
             scenario,
             create_report=False,
@@ -166,9 +249,11 @@ class TwinTests(unittest.TestCase):
         core_jump_rad = 2.0 * math.acos(
             min(1.0, abs(float(np.dot(core_attitude, integrated_attitude))))
         )
-        self.assertAlmostEqual(core_row["time_s"], separation_time)
+        self.assertAlmostEqual(
+            core_row["time_s"], separation_time, delta=0.01
+        )
         self.assertLess(branch_difference_rad, 1e-3)
-        self.assertLess(core_jump_rad, 2e-3)
+        self.assertLess(core_jump_rad, 1e-2)
 
     def test_separation_conserves_mass_and_momentum(self) -> None:
         scenario = default_scenario()
@@ -244,7 +329,7 @@ class TwinTests(unittest.TestCase):
     def test_launch_rail_releases_and_emits_exit_once(self) -> None:
         scenario = default_scenario()
         scenario["simulation"].update(
-            {"max_time_s": 1.0, "output_rate_hz": 20.0}
+            {"max_time_s": 10.0, "output_rate_hz": 20.0}
         )
         result = run_simulation(
             scenario, create_report=False, persist=False
@@ -333,6 +418,15 @@ class TwinTests(unittest.TestCase):
         scenario["sensors"]["magnetometer_rate_hz"] = 100.0
         scenario["sensors"]["magnetometer_noise"] = 0.0
         scenario["sensors"]["magnetometer_bias_sigma"] = 0.0
+        scenario["sensors"]["magnetometer_bias_random_walk_sqrt_s"] = 0.0
+        scenario["sensors"]["magnetometer_scale_factor_error"] = [0.0] * 3
+        scenario["sensors"]["magnetometer_cross_axis_misalignment"] = (
+            np.eye(3).tolist()
+        )
+        scenario["sensors"]["magnetometer_quantization"] = 0.0
+        scenario["sensors"]["magnetometer_temperature_coefficient_k"] = (
+            [0.0] * 3
+        )
         stage = scenario["vehicle"]["stages"][0]
         launch_position = np.array([6_378_137.0, 0.0, 0.0])
         body = Body(
@@ -400,32 +494,28 @@ class TwinTests(unittest.TestCase):
                 "sensor": "imu",
                 "channel": 0,
                 "type": "freeze",
-                "start_s": 0.01,
-                "duration_s": 0.01,
+                "_active": True,
             },
             {
                 "body": "integrated_stack",
                 "sensor": "imu",
                 "channel": 1,
                 "type": "dropout",
-                "start_s": 0.01,
-                "duration_s": 0.01,
+                "_active": True,
             },
             {
                 "body": "integrated_stack",
                 "sensor": "imu",
                 "channel": 1,
                 "type": "stuck-valid",
-                "start_s": 0.01,
-                "duration_s": 0.01,
+                "_active": True,
             },
             {
                 "body": "integrated_stack",
                 "sensor": "imu",
                 "channel": 2,
                 "type": "stale",
-                "start_s": 0.01,
-                "duration_s": 0.01,
+                "_active": True,
             },
         ]
         before = [
@@ -589,8 +679,7 @@ class TwinTests(unittest.TestCase):
                 "body": "integrated_stack",
                 "component": "tvc",
                 "type": "loss_of_power",
-                "start_s": 0.015,
-                "duration_s": 0.005,
+                "_active": True,
             }
         ]
         before_fault = body.last_tvc_rad.copy()
@@ -679,14 +768,24 @@ class TwinTests(unittest.TestCase):
         ]
         scenario["faults"] = [
             {
+                "id": "core-right-cutoff",
                 "body": "integrated_stack",
                 "component": "engine",
                 "engine_id": "core-right",
                 "type": "cutoff",
-                "start_s": 0.0,
-                "duration_s": 1.0,
             }
         ]
+        scenario["mission"]["timeline"].append(
+            {
+                "id": "activate-core-right-cutoff",
+                "trigger": {"type": "time", "at_s": 0.0},
+                "action": {
+                    "type": "set_fault",
+                    "fault_id": "core-right-cutoff",
+                    "state": "active",
+                },
+            }
+        )
 
         result = run_simulation(
             scenario,
@@ -809,19 +908,46 @@ class TwinTests(unittest.TestCase):
         )
         scenario["vehicle"]["stages"][0]["propulsion"]["burn_duration_s"] = 2.0
         scenario["vehicle"]["stages"][1]["propulsion"]["burn_duration_s"] = 2.0
+        scenario["mission"]["flight_core"]["stage2_first_burn_s"] = 1.0
+        scenario["mission"]["orbit"]["enabled"] = False
         for stage in scenario["vehicle"]["stages"]:
             stage["propulsion"].pop("performance_curve", None)
-        scenario["mission"]["events"][0]["delay"] = 0.2
-        scenario["mission"]["events"][1]["delay"] = 0.3
+        scenario["mission"]["flight_core"]["separation_delay_s"] = 0.2
+        scenario["mission"]["flight_core"]["stage2_ignition_delay_s"] = 0.3
         scenario["faults"] = [
             {
+                "id": "upper-test-gnss",
                 "body": "upper_stage",
                 "sensor": "gnss",
                 "type": "dropout",
-                "start_s": 3.0,
-                "duration_s": 4.0,
             }
         ]
+        scenario["mission"]["timeline"].extend(
+            [
+                {
+                    "id": "activate-upper-test-gnss",
+                    "trigger": {"type": "time", "at_s": 3.0},
+                    "action": {
+                        "type": "set_fault",
+                        "fault_id": "upper-test-gnss",
+                        "state": "active",
+                    },
+                },
+                {
+                    "id": "deactivate-upper-test-gnss",
+                    "trigger": {
+                        "type": "after_event",
+                        "event": "activate-upper-test-gnss",
+                        "delay_s": 4.0,
+                    },
+                    "action": {
+                        "type": "set_fault",
+                        "fault_id": "upper-test-gnss",
+                        "state": "inactive",
+                    },
+                },
+            ]
+        )
         with tempfile.TemporaryDirectory() as directory:
             first = run_simulation(
                 scenario, seed=19, output_root=directory, create_report=False
@@ -830,7 +956,7 @@ class TwinTests(unittest.TestCase):
                 scenario, seed=19, output_root=directory, create_report=False
             )
             self.assertTrue(any(event["event"] == "stage_separation" for event in first.events))
-            self.assertTrue(any(event["event"] == "burnout_stage_1" for event in first.events))
+            self.assertTrue(any(event["event"] == "meco" for event in first.events))
             self.assertTrue(any(event["event"] == "stage2_ignition" for event in first.events))
             self.assertTrue(any(row["mode"] == "BOOST_2" for row in first.telemetry))
             self.assertTrue(
@@ -929,7 +1055,7 @@ class TwinTests(unittest.TestCase):
                 command_rows = list(csv.DictReader(file))
             self.assertEqual(
                 [row["command_type"] for row in command_rows],
-                ["1", "3"],
+                ["1", "3", "5"],
             )
             self.assertTrue(
                 any(

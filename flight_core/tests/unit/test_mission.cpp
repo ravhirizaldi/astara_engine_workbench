@@ -5,6 +5,8 @@
 #include "mission/mission.hpp"
 #include "sensors/sensor_voting.hpp"
 
+#include <cmath>
+
 using namespace fsw_test;
 
 void test_delayed_launch_event_timing_and_one_shot_separation() {
@@ -212,11 +214,111 @@ void test_accelerometer_loss_cannot_trigger_burnout() {
     REQUIRE(context.mission.burnout_detected_s < 0.0);
 }
 
+void test_orbit_cutoff_uses_configured_speed_margin() {
+    auto config = default_config();
+    config.orbit_enabled = 1;
+    config.orbit_cutoff_speed_margin_m_s = 10.0;
+    fsw::internal::Context context(config);
+    fsw::internal::VotedSensors voted{};
+    voted.accelerometer_valid = true;
+    voted.gyroscope_valid = true;
+    voted.imu_valid = true;
+    context.mission.mode = FSW_MODE_ORBIT_INSERTION;
+    context.mission.circularization_ignition_s = 0.0;
+    context.navigation.attitude_valid = true;
+    context.navigation.position_ecef = {6571000.0, 0.0, 0.0};
+    context.timing.step_delta_s = 0.01;
+
+    constexpr double earth_mu_m3_s2 = 3.986004418e14;
+    constexpr double earth_rotation_rad_s = 7.2921150e-5;
+    const double radius_m = context.navigation.position_ecef[0];
+    const double circular_speed_m_s = std::sqrt(
+        earth_mu_m3_s2 / radius_m
+    );
+    context.navigation.velocity_ecef = {
+        0.0,
+        circular_speed_m_s
+            - earth_rotation_rad_s * radius_m
+            + config.orbit_cutoff_speed_margin_m_s
+            - 0.1,
+        0.0,
+    };
+    auto input = input_at(10.0);
+    input.propulsion.running = 1;
+    fsw::internal::update_mode(context, input, voted);
+    REQUIRE(context.mission.mode == FSW_MODE_ORBIT_INSERTION);
+
+    context.navigation.velocity_ecef[1] += 0.2;
+    input = input_at(10.01);
+    input.propulsion.running = 1;
+    fsw::internal::update_mode(context, input, voted);
+    REQUIRE(context.mission.mode == FSW_MODE_ORBIT);
+    REQUIRE(context.control.stage2_shutdown_request);
+}
+
+void test_orbit_coast_requires_two_sided_altitude_and_radial_bands() {
+    auto config = default_config();
+    config.orbit_enabled = 1;
+    config.body_role = FSW_BODY_UPPER;
+    fsw::internal::Context context(config);
+    fsw::internal::VotedSensors voted{};
+    voted.accelerometer_valid = true;
+    voted.gyroscope_valid = true;
+    voted.imu_valid = true;
+    context.mission.mode = FSW_MODE_COAST;
+    context.navigation.attitude_valid = true;
+    context.navigation.altitude = config.orbit_target_altitude_m
+        + config.orbit_altitude_tolerance_m + 1.0;
+    context.navigation.position_ecef = {
+        kEarthRadiusM + context.navigation.altitude, 0.0, 0.0
+    };
+    context.navigation.velocity_ecef = {0.0, 0.0, 0.0};
+    auto input = input_at(10.0);
+    fsw::internal::update_mode(context, input, voted);
+    REQUIRE(context.mission.mode == FSW_MODE_COAST);
+
+    context.navigation.altitude = config.orbit_target_altitude_m;
+    context.navigation.position_ecef[0] =
+        kEarthRadiusM + context.navigation.altitude;
+    context.navigation.velocity_ecef[0] =
+        config.orbit_radial_velocity_tolerance_m_s + 1.0;
+    input = input_at(10.01);
+    fsw::internal::update_mode(context, input, voted);
+    REQUIRE(context.mission.mode == FSW_MODE_COAST);
+
+    context.navigation.velocity_ecef[0] = 0.0;
+    input = input_at(10.02);
+    fsw::internal::update_mode(context, input, voted);
+    REQUIRE(context.mission.mode == FSW_MODE_ORBIT_INSERTION);
+}
+
+void test_interstage_clear_removes_only_recovered_faults() {
+    const auto config = default_config();
+    fsw::internal::Context context(config);
+    fsw::internal::VotedSensors voted{};
+    context.mission.mode = FSW_MODE_INTERSTAGE;
+    context.faults.active_fault_flags = FSW_FAULT_GNSS_UNAVAILABLE;
+    context.faults.latched_fault_flags =
+        FSW_FAULT_GNSS_UNAVAILABLE | FSW_FAULT_IMU_UNAVAILABLE;
+    auto input = input_at(1.0);
+    set_command(input, 1, FSW_COMMAND_CLEAR_FAULTS);
+
+    fsw::internal::process_command(context, input, voted);
+
+    REQUIRE(context.control.command_result == FSW_COMMAND_ACCEPTED);
+    REQUIRE(
+        context.faults.latched_fault_flags == FSW_FAULT_GNSS_UNAVAILABLE
+    );
+}
+
 int main() {
     test_delayed_launch_event_timing_and_one_shot_separation();
     test_standalone_upper_accepts_separation_feedback();
     test_drogue_main_and_landing();
     test_manual_and_automatic_abort();
     test_accelerometer_loss_cannot_trigger_burnout();
+    test_orbit_cutoff_uses_configured_speed_margin();
+    test_orbit_coast_requires_two_sided_altitude_and_radial_bands();
+    test_interstage_clear_removes_only_recovered_faults();
     return EXIT_SUCCESS;
 }

@@ -28,9 +28,9 @@ def flight_mode_events(
         MODE_NAMES[previous_mode] if previous_mode is not None else None
     )
     if previous_name == "BOOST_1" and current_name == "SEPARATION":
-        events.append(event(time_s, body, "burnout_stage_1"))
+        events.append(event(time_s, body, "meco"))
     if current_name == "BOOST_2":
         events.append(event(time_s, body, "stage2_ignition"))
     if previous_name == "BOOST_2" and current_name == "COAST":
-        events.append(event(time_s, body, "burnout_stage_2"))
+        events.append(event(time_s, body, "stage2_first_cutoff"))
     return events

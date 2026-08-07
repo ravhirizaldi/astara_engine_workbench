@@ -20,7 +20,11 @@ class AeroResult:
 
 def atmosphere(altitude_m: float) -> tuple[float, float, float]:
     """Return density, pressure, and sound speed using a layered ISA approximation."""
-    altitude = max(0.0, min(float(altitude_m), 100_000.0))
+    altitude = max(0.0, float(altitude_m))
+    if altitude > 100_000.0:
+        # ponytail: vacuum above the ISA ceiling; add an exosphere model only
+        # when rarefied-flow fidelity is required.
+        return 0.0, 0.0, math.sqrt(1.4 * 287.05287 * 186.946)
     layers = (
         (0.0, 288.15, 101_325.0, -0.0065),
         (11_000.0, 216.65, 22_632.1, 0.0),

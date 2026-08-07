@@ -83,6 +83,9 @@ struct MissionState {
     double separation_confirmed_s{-1.0};
     double stage2_ignition_commanded_s{-1.0};
     double stage2_ignition_confirmed_s{-1.0};
+    double circularization_ignition_s{-1.0};
+    double orbit_achieved_s{-1.0};
+    bool payload_deploy_requested{};
     double drogue_commanded_s{-1.0};
     double main_commanded_s{-1.0};
     uint64_t next_discrete_actuation_sequence{1};
@@ -108,6 +111,7 @@ struct ControlState {
     uint32_t event_flags{};
     bool stage1_ignite_request{};
     bool stage2_ignite_request{};
+    bool stage2_shutdown_request{};
 };
 
 struct Context {

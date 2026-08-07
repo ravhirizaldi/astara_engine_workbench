@@ -13,10 +13,16 @@ from aerospace_workbench.mathematics.quaternions import (
     quat_normalize,
     quat_rotate,
 )
+from aerospace_workbench.simulation.aerodynamics import atmosphere
 from aerospace_workbench.mathematics.vectors import cross3
 
 
 class Math3dTests(unittest.TestCase):
+    def test_atmosphere_is_vacuum_above_model_ceiling(self) -> None:
+        density, pressure, sound_speed = atmosphere(200_000.0)
+        self.assertEqual((density, pressure), (0.0, 0.0))
+        self.assertGreater(sound_speed, 0.0)
+
     def test_cross3_matches_numpy(self) -> None:
         left = np.array([1.5, -2.0, 4.25])
         right = np.array([-3.0, 0.75, 2.0])
@@ -41,6 +47,12 @@ class Math3dTests(unittest.TestCase):
         )
         axis = quat_rotate(initial_attitude(position, 90.0), np.array([1.0, 0.0, 0.0]))
         self.assertGreater(float(np.dot(axis, position / np.linalg.norm(position))), 0.999)
+        pitch_direction = quat_rotate(
+            initial_attitude(position, 90.0), np.array([0.0, 0.0, -1.0])
+        )
+        np.testing.assert_allclose(
+            ecef_to_ned(pitch_direction, position), [0.0, 1.0, 0.0], atol=1e-12
+        )
 
 
 if __name__ == "__main__":

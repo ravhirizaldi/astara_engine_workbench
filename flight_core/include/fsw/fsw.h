@@ -47,7 +47,10 @@ enum FswFlightMode {
     FSW_MODE_DROGUE = 9,
     FSW_MODE_MAIN = 10,
     FSW_MODE_LANDED = 11,
-    FSW_MODE_ABORT = 12
+    FSW_MODE_ABORT = 12,
+    FSW_MODE_ORBIT_INSERTION = 13,
+    FSW_MODE_ORBIT = 14,
+    FSW_MODE_PAYLOAD_DEPLOYED = 15
 };
 
 enum FswNavigationStatus {
@@ -154,7 +157,8 @@ enum FswDiscreteActuationAction {
     FSW_DISCRETE_ACTION_NONE = 0,
     FSW_DISCRETE_ACTION_STAGE_SEPARATE = 1,
     FSW_DISCRETE_ACTION_DEPLOY_DROGUE = 2,
-    FSW_DISCRETE_ACTION_DEPLOY_MAIN = 3
+    FSW_DISCRETE_ACTION_DEPLOY_MAIN = 3,
+    FSW_DISCRETE_ACTION_DEPLOY_PAYLOAD = 4
 };
 
 typedef struct {
@@ -232,6 +236,25 @@ typedef struct {
     double max_velocity_sigma_m_s;
     double max_attitude_sigma_rad;
     double launch_azimuth_rad;
+    double launch_acceleration_threshold_m_s2;
+    double launch_persistence_s;
+    double burnout_acceleration_threshold_m_s2;
+    double burnout_persistence_s;
+    double apogee_min_altitude_m;
+    double apogee_descent_velocity_m_s;
+    double apogee_persistence_s;
+    double landing_altitude_m;
+    double landing_speed_m_s;
+    double landing_persistence_s;
+    double aero_reference_dynamic_pressure_pa;
+    double aero_high_q_authority_scale;
+    double orbit_target_altitude_m;
+    double orbit_altitude_tolerance_m;
+    double orbit_cutoff_speed_margin_m_s;
+    double orbit_radial_velocity_tolerance_m_s;
+    double circularization_max_burn_s;
+    double payload_deploy_delay_s;
+    int32_t orbit_enabled;
     uint32_t guidance_count;
     FswGuidancePoint guidance[FSW_MAX_GUIDANCE_POINTS];
     int32_t body_role;
@@ -345,8 +368,10 @@ typedef struct {
     int32_t stage1_ignite;
     int32_t stage_separate;
     int32_t stage2_ignite;
+    int32_t stage2_shutdown;
     int32_t deploy_drogue;
     int32_t deploy_main;
+    int32_t deploy_payload;
     int32_t abort;
     int32_t attitude_valid;
     uint64_t command_sequence;

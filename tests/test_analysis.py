@@ -84,11 +84,40 @@ class CredibilityAnalysisTests(unittest.TestCase):
         self.assertEqual(metrics["upper_impact_latitude_deg"], -6.1)
         self.assertEqual(metrics["failure_reason"], "landed")
 
+    def test_orbit_metrics_use_insertion_as_final_stage2_cutoff(self) -> None:
+        result = RunResult(
+            Path("."),
+            {
+                "maximum_altitude_m": 215_000.0,
+                "aero_out_of_envelope_samples": 0,
+                "aero_out_of_envelope_pre_recovery_samples": 0,
+                "duration_s": 300.0,
+                "status": "FAIL",
+                "checks": {"orbit_insertion": False},
+            },
+            [],
+            [],
+            [{"event": "stage2_first_cutoff", "time_s": 190.0}],
+        )
+
+        self.assertIsNone(_metrics(result)["stage2_burnout_time_s"])
+        result.events.append({"event": "orbit_insertion", "time_s": 250.0})
+        self.assertEqual(_metrics(result)["stage2_burnout_time_s"], 250.0)
+
     def test_simulation_records_both_burnout_events(self) -> None:
         scenario = default_scenario()
         scenario["simulation"].update(
-            {"max_time_s": 20.0, "output_rate_hz": 1.0}
+            {"max_time_s": 6.0, "output_rate_hz": 1.0}
         )
+        for stage in scenario["vehicle"]["stages"]:
+            stage["propulsion"]["burn_duration_s"] = 2.0
+            stage["propulsion"].pop("performance_curve", None)
+        scenario["mission"]["flight_core"].update(
+            separation_delay_s=0.2,
+            stage2_ignition_delay_s=0.3,
+            stage2_first_burn_s=1.0,
+        )
+        scenario["mission"]["orbit"]["enabled"] = False
         result = run_simulation(
             scenario,
             create_report=False,
@@ -96,8 +125,8 @@ class CredibilityAnalysisTests(unittest.TestCase):
             summary_only=True,
         )
         events = {event["event"] for event in result.events}
-        self.assertIn("burnout_stage_1", events)
-        self.assertIn("burnout_stage_2", events)
+        self.assertIn("meco", events)
+        self.assertIn("stage2_first_cutoff", events)
         self.assertIsNotNone(_metrics(result)["stage2_burnout_time_s"])
 
     def test_tabulated_models_and_short_analysis(self) -> None:

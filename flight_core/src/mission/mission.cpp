@@ -42,6 +42,38 @@ bool propulsion_fresh(const Context& context, const FswInput& input) {
     );
 }
 
+double orbit_radial_velocity(const Context& context) {
+    const auto& position = context.navigation.position_ecef;
+    const auto& velocity = context.navigation.velocity_ecef;
+    const double radius = std::sqrt(
+        position[0] * position[0]
+        + position[1] * position[1]
+        + position[2] * position[2]
+    );
+    return radius > 0.0
+        ? (
+            position[0] * velocity[0]
+            + position[1] * velocity[1]
+            + position[2] * velocity[2]
+        ) / radius
+        : 0.0;
+}
+
+double orbit_inertial_speed(const Context& context) {
+    const auto& position = context.navigation.position_ecef;
+    const auto& velocity = context.navigation.velocity_ecef;
+    const double inertial[] = {
+        velocity[0] - kEarthRotationRadS * position[1],
+        velocity[1] + kEarthRotationRadS * position[0],
+        velocity[2],
+    };
+    return std::sqrt(
+        inertial[0] * inertial[0]
+        + inertial[1] * inertial[1]
+        + inertial[2] * inertial[2]
+    );
+}
+
 void request_discrete_actuation(
     Context& context,
     int32_t action
@@ -72,9 +104,10 @@ void update_integrated_mode(
                 && propulsion_fresh(context, input)
                 && input.propulsion.running
                 && persisted(
-                    voted.acceleration[0] > 2.0,
+                    voted.acceleration[0]
+                        > context.config.launch_acceleration_threshold_m_s2,
                     context.timing.step_delta_s,
-                    0.05,
+                    context.config.launch_persistence_s,
                     context.mission.launch_evidence_s
                 )
             ) {
@@ -97,9 +130,11 @@ void update_integrated_mode(
                 && persisted(
                     voted.accelerometer_valid
                         && context.navigation.attitude_valid
-                        && voted.acceleration[0] < 2.0,
+                        && voted.acceleration[0]
+                            < context.config
+                                .burnout_acceleration_threshold_m_s2,
                     context.timing.step_delta_s,
-                    0.05,
+                    context.config.burnout_persistence_s,
                     context.mission.burnout_evidence_s
                 )
             ) {
@@ -198,7 +233,67 @@ void update_integrated_mode(
                     >= context.mission.stage2_ignition_confirmed_s
                         + context.config.stage2_burn_s
             ) {
+                context.control.stage2_shutdown_request = true;
                 context.mission.mode = FSW_MODE_COAST;
+            }
+            break;
+        case FSW_MODE_COAST:
+            if (
+                context.config.orbit_enabled
+                && context.config.body_role != FSW_BODY_CORE
+                && std::abs(
+                    context.navigation.altitude
+                    - context.config.orbit_target_altitude_m
+                ) <= context.config.orbit_altitude_tolerance_m
+                && std::abs(orbit_radial_velocity(context))
+                    <= context.config.orbit_radial_velocity_tolerance_m_s
+            ) {
+                context.control.stage2_ignite_request = true;
+                context.mission.circularization_ignition_s = suite.time_s;
+                context.mission.mode = FSW_MODE_ORBIT_INSERTION;
+            }
+            break;
+        case FSW_MODE_ORBIT_INSERTION: {
+            const auto& position = context.navigation.position_ecef;
+            const double radius = std::sqrt(
+                position[0] * position[0]
+                + position[1] * position[1]
+                + position[2] * position[2]
+            );
+            const double circular_speed = std::sqrt(kEarthMuM3S2 / radius);
+            if (
+                propulsion_fresh(context, input)
+                && input.propulsion.running
+                && orbit_inertial_speed(context)
+                    >= circular_speed
+                        + context.config.orbit_cutoff_speed_margin_m_s
+            ) {
+                context.control.stage2_shutdown_request = true;
+                context.mission.orbit_achieved_s = suite.time_s;
+                context.mission.mode = FSW_MODE_ORBIT;
+            } else if (
+                context.mission.circularization_ignition_s >= 0.0
+                && suite.time_s
+                    - context.mission.circularization_ignition_s
+                    > context.config.circularization_max_burn_s
+            ) {
+                context.control.stage2_shutdown_request = true;
+                context.mission.mode = FSW_MODE_ABORT;
+            }
+            break;
+        }
+        case FSW_MODE_ORBIT:
+            if (
+                !context.mission.payload_deploy_requested
+                && context.mission.orbit_achieved_s >= 0.0
+                && suite.time_s - context.mission.orbit_achieved_s
+                    >= context.config.payload_deploy_delay_s
+            ) {
+                context.mission.payload_deploy_requested = true;
+                request_discrete_actuation(
+                    context, FSW_DISCRETE_ACTION_DEPLOY_PAYLOAD
+                );
+                context.mission.mode = FSW_MODE_PAYLOAD_DEPLOYED;
             }
             break;
         default:
@@ -214,7 +309,8 @@ void update_mode(
     const auto& suite = input.sensors;
     const bool powered = context.mission.mode == FSW_MODE_IGNITION
         || context.mission.mode == FSW_MODE_BOOST_1
-        || context.mission.mode == FSW_MODE_BOOST_2;
+        || context.mission.mode == FSW_MODE_BOOST_2
+        || context.mission.mode == FSW_MODE_ORBIT_INSERTION;
     if (persisted(
         powered
             && (
@@ -288,15 +384,22 @@ void update_mode(
             context.sensors.disagreement_flags
             & FSW_DISAGREEMENT_CROSS_ALTITUDE
         ) == 0;
+    const bool recovery_enabled = !(
+        context.config.orbit_enabled
+        && context.config.body_role != FSW_BODY_CORE
+    );
     if (
-        altitude_aided
+        recovery_enabled
+        && altitude_aided
         && context.mission.mode >= FSW_MODE_COAST
         && context.mission.mode < FSW_MODE_APOGEE
-        && context.navigation.altitude > 100.0
+        && context.navigation.altitude
+            > context.config.apogee_min_altitude_m
         && persisted(
-            context.navigation.vertical_velocity < -0.5,
+            context.navigation.vertical_velocity
+                < context.config.apogee_descent_velocity_m_s,
             context.timing.step_delta_s,
-            0.20,
+            context.config.apogee_persistence_s,
             context.mission.apogee_evidence_s
         )
     ) {
@@ -356,10 +459,11 @@ void update_mode(
         altitude_aided
         && context.mission.main_deployed
         && persisted(
-            context.navigation.altitude <= 2.0
-                && std::abs(context.navigation.vertical_velocity) < 15.0,
+            context.navigation.altitude <= context.config.landing_altitude_m
+                && std::abs(context.navigation.vertical_velocity)
+                    < context.config.landing_speed_m_s,
             context.timing.step_delta_s,
-            1.0,
+            context.config.landing_persistence_s,
             context.mission.landing_evidence_s
         )
     ) {

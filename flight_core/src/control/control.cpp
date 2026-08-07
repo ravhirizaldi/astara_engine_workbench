@@ -23,6 +23,11 @@ void calculate_controls(
         || (
             context.mission.mode != FSW_MODE_BOOST_1
             && context.mission.mode != FSW_MODE_BOOST_2
+            && context.mission.mode != FSW_MODE_ORBIT_INSERTION
+            && !(
+                context.config.orbit_enabled
+                && context.mission.mode == FSW_MODE_COAST
+            )
         )
     ) {
         return;
@@ -32,13 +37,34 @@ void calculate_controls(
         : 0.0;
     const auto target = guidance_at(context.config, guidance_time_s);
     const auto angles = euler(relative_attitude(context));
-    const double roll_error = -angles[0];
-    const double pitch_error = target.pitch_rad - angles[1];
-    const double yaw_error = wrap_angle(
+    double roll_error = -angles[0];
+    double pitch_error = target.pitch_rad - angles[1];
+    double yaw_error = wrap_angle(
         target.azimuth_rad
         - context.config.guidance[0].azimuth_rad
         - angles[2]
     );
+    if (
+        context.config.orbit_enabled
+        && (
+            context.mission.mode == FSW_MODE_COAST
+            || context.mission.mode == FSW_MODE_ORBIT_INSERTION
+        )
+    ) {
+        const auto& position = context.navigation.position_ecef;
+        const auto& velocity = context.navigation.velocity_ecef;
+        const std::array<double, 3> inertial_velocity{
+            velocity[0] - kEarthRotationRadS * position[1],
+            velocity[1] + kEarthRotationRadS * position[0],
+            velocity[2],
+        };
+        const auto prograde_body = rotate(
+            conjugate(context.navigation.attitude),
+            inertial_velocity
+        );
+        pitch_error = -std::atan2(prograde_body[2], prograde_body[0]);
+        yaw_error = std::atan2(prograde_body[1], prograde_body[0]);
+    }
     const double pitch_effort =
         context.config.control_kp * pitch_error
         - context.config.control_kd * context.navigation.last_gyro[1];
@@ -56,16 +82,27 @@ void calculate_controls(
     );
     const double aero_blend = air_data_valid
         ? std::clamp(
-            input.air_data.dynamic_pressure_pa / 35'000.0, 0.0, 1.0
+            input.air_data.dynamic_pressure_pa
+                / context.config.aero_reference_dynamic_pressure_pa,
+            0.0,
+            1.0
         )
         : 0.0;
     output.tvc_pitch_rad = std::clamp(
-        pitch_effort * (1.0 - 0.65 * aero_blend),
+        pitch_effort
+            * (
+                1.0
+                - context.config.aero_high_q_authority_scale * aero_blend
+            ),
         -context.config.max_tvc_rad,
         context.config.max_tvc_rad
     );
     output.tvc_yaw_rad = std::clamp(
-        yaw_effort * (1.0 - 0.65 * aero_blend),
+        yaw_effort
+            * (
+                1.0
+                - context.config.aero_high_q_authority_scale * aero_blend
+            ),
         -context.config.max_tvc_rad,
         context.config.max_tvc_rad
     );

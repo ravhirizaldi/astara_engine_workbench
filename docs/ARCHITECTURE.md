@@ -89,9 +89,27 @@ under `flight_core/src/`.
 
 ## Current process model
 
-The desktop solver owns the truth model and loads Flight Core through its stable
-C ABI. GUI rendering runs separately from the solver. This is host SIL, but not
-yet the roadmap's independent-process SIL target.
+The desktop application starts the solver in a worker process. That worker owns
+the truth model, loads Flight Core through its stable C ABI, persists complete
+run artifacts, and publishes compact display rows through a bounded message
+queue. The Qt GUI process owns rendering and operator controls. A second bounded
+queue carries validated live-fault commands to the worker. Flight Core remains
+in-process with the truth model, so this is host SIL but not yet the roadmap's
+independent-process Flight Core target.
+
+The UI does not reread report files during flight. Metrics consume the newest
+compact row at 30 Hz. PyQtGraph trajectory, altitude, speed, and thrust curves
+refresh at 12 Hz using NumPy arrays, one-pixel non-antialiased lines, and a
+mission-aware sampling stride derived from maximum time and output rate. Each
+body renders no more than 2,001 display points, including its current position;
+this does not reduce persisted telemetry. Time-series strips use clipping and
+peak downsampling. The trajectory does not use x-axis clipping because
+downrange can be non-monotonic during recovery.
+
+Qt OpenGL rendering is explicit opt-in through `ASTARA_UI_OPENGL=1`. CPU
+rendering is the default because OpenGL context creation is platform- and
+driver-dependent, particularly under WSL. Renderer selection changes only the
+presentation process.
 
 Guidance points are copied into a fixed 32-point configuration table during
 initialization. The upper stage inherits the integrated-stack Flight Core
@@ -148,7 +166,11 @@ only for failures and the configured deterministic sample.
 - Platform execution time, deadline misses, watchdog health, navigation
   uncertainty, innovations, ECEF estimates, and fault lifecycle are observable
   outputs.
-- UI telemetry and queues are bounded.
+- UI telemetry, plot history, and inter-process queues are bounded. Full run
+  evidence is persisted by the solver worker rather than retained by the GUI.
+- Live fault commands are normalized at the GUI and solver boundaries. Runtime
+  sensor and engine faults reuse the scenario fault models, emit evidence
+  events, and are removed from the in-memory scenario when the run ends.
 
 ## Safety boundary
 

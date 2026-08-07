@@ -72,6 +72,24 @@ bool valid_config(const FswConfig& config) {
         config.max_velocity_sigma_m_s,
         config.max_attitude_sigma_rad,
         config.launch_azimuth_rad,
+        config.launch_acceleration_threshold_m_s2,
+        config.launch_persistence_s,
+        config.burnout_acceleration_threshold_m_s2,
+        config.burnout_persistence_s,
+        config.apogee_min_altitude_m,
+        config.apogee_descent_velocity_m_s,
+        config.apogee_persistence_s,
+        config.landing_altitude_m,
+        config.landing_speed_m_s,
+        config.landing_persistence_s,
+        config.aero_reference_dynamic_pressure_pa,
+        config.aero_high_q_authority_scale,
+        config.orbit_target_altitude_m,
+        config.orbit_altitude_tolerance_m,
+        config.orbit_cutoff_speed_margin_m_s,
+        config.orbit_radial_velocity_tolerance_m_s,
+        config.circularization_max_burn_s,
+        config.payload_deploy_delay_s,
     };
     if (
         config.abi_version != FSW_ABI_VERSION
@@ -145,6 +163,26 @@ bool valid_config(const FswConfig& config) {
         || config.max_altitude_sigma_m <= 0.0
         || config.max_velocity_sigma_m_s <= 0.0
         || config.max_attitude_sigma_rad <= 0.0
+        || config.launch_acceleration_threshold_m_s2 <= 0.0
+        || config.launch_persistence_s <= 0.0
+        || config.burnout_acceleration_threshold_m_s2 <= 0.0
+        || config.burnout_persistence_s <= 0.0
+        || config.apogee_min_altitude_m < 0.0
+        || config.apogee_descent_velocity_m_s >= 0.0
+        || config.apogee_persistence_s <= 0.0
+        || config.landing_altitude_m < 0.0
+        || config.landing_speed_m_s <= 0.0
+        || config.landing_persistence_s <= 0.0
+        || config.aero_reference_dynamic_pressure_pa <= 0.0
+        || config.aero_high_q_authority_scale < 0.0
+        || config.aero_high_q_authority_scale > 1.0
+        || config.orbit_target_altitude_m <= 0.0
+        || config.orbit_altitude_tolerance_m <= 0.0
+        || config.orbit_cutoff_speed_margin_m_s < 0.0
+        || config.orbit_radial_velocity_tolerance_m_s < 0.0
+        || config.circularization_max_burn_s <= 0.0
+        || config.payload_deploy_delay_s < 0.0
+        || (config.orbit_enabled != 0 && config.orbit_enabled != 1)
         || config.guidance_count < 2
         || config.guidance_count > FSW_MAX_GUIDANCE_POINTS
         || config.body_role < FSW_BODY_INTEGRATED

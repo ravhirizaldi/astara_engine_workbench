@@ -18,7 +18,8 @@ run artifacts, and architecture documents.
 | **CI** | Continuous Integration | Automated builds and tests run for repository changes, ideally covering Debug, Release, sanitizers, replay, ABI, and regression checks. |
 | **I/O** | Input/Output | Data crossing a software or hardware boundary. ASTARA Flight Core currently exposes no physical ignition, valve, serial, GPIO, or flight-termination I/O. |
 | **GPIO** | General-Purpose Input/Output | Digital hardware pins. Mentioned only as an excluded physical interface in the current safety boundary. |
-| **GUI** | Graphical User Interface | The desktop workbench interface used to select scenarios, run simulations, replay results, and inspect plots and telemetry. |
+| **GUI** | Graphical User Interface | The desktop workbench interface used to edit scenarios, run simulations, inject simulated faults, inspect bounded live plots, and open complete reports. |
+| **Display sampling** | Presentation-only reduction of live plot points | Keeps the Qt GUI responsive without changing solver timesteps, Flight Core inputs, or persisted telemetry. |
 | **CLI** | Command-Line Interface | Commands such as `awb simulate`, `awb validate`, `awb analyze`, and `awb replay`; `python3 -m aerospace_workbench` is the module form. |
 
 ## Interfaces and data contracts
@@ -29,7 +30,7 @@ run artifacts, and architecture documents.
 | **ABI** | Application Binary Interface | The exact binary layout and calling contract between Python and the compiled C++ Flight Core. ASTARA exposes versioned `FswConfig`, `FswInput`, `FswOutput`, and `fsw_*` symbols. |
 | **C ABI** | C-compatible binary interface | The stable interface loaded by Python through `ctypes`, even though Flight Core is implemented in C++. |
 | **FFI** | Foreign Function Interface | A mechanism for one programming language to call another. Python-to-C++ calls through the C ABI are an FFI boundary. |
-| **Schema** | Machine-readable data structure contract | Scenario, vehicle, and run artifacts carry explicit schema versions such as `aerospace-workbench.scenario.v1` and `aerospace-workbench.vehicle.v2`. |
+| **Schema** | Machine-readable data structure contract | Scenario, vehicle, and run artifacts carry explicit schema versions such as `aerospace-workbench.scenario.v2` and `aerospace-workbench.vehicle.v2`. |
 | **Typed input/output** | Fields with explicit meaning, units, and structure | Flight Core receives structured sensor, command, propulsion, recovery, air-data, and timing fields instead of an unstructured dictionary or byte stream. |
 | **Replay** | Re-execution from recorded inputs | `awb replay` sends a recorded sensor and command stream through the same Flight Core without rerunning vehicle truth dynamics. |
 | **Artifact** | Persisted output from a run | Examples include `truth.csv`, `sensors.csv.gz`, `commands.csv`, `fsw.csv`, `events.csv`, and `manifest.json`. |

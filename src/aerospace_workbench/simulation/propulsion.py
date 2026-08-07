@@ -30,15 +30,14 @@ def engine_fault_active(
     time_s: float,
 ) -> dict[str, Any] | None:
     for fault in scenario.get("faults", []):
-        start = float(fault.get("start_s", 0.0))
-        end = start + float(fault.get("duration_s", math.inf))
         target = fault.get("component", fault.get("sensor"))
         target_engine = fault.get("engine_id", "all")
         if (
+            bool(fault.get("_active", False))
+            and
             fault.get("body", "all") in ("all", body)
             and target == "engine"
             and target_engine in ("all", engine_id)
-            and start <= time_s <= end
         ):
             return fault
     return None
@@ -82,21 +81,55 @@ def propulsion_step(
     propulsion = body.stage["propulsion"]
     engines = stage_engines(body.stage)
     body.last_engine_thrusts_n = {engine["id"]: 0.0 for engine in engines}
-    should_burn = False
+    ignition_request = False
     if body.stage_index == 0 and body.upper_mass_kg > 0.0:
-        if output.stage1_ignite and body.engine_started_s is None:
-            body.engine_started_s = time_s
-        should_burn = body.engine_started_s is not None
+        ignition_request = bool(output.stage1_ignite)
     if body.stage_index == 1:
-        if output.stage2_ignite and body.engine_started_s is None:
-            body.engine_started_s = time_s
-        should_burn = body.engine_started_s is not None
-    if output.abort:
-        should_burn = False
-    start = body.engine_started_s or 0.0
-    elapsed = time_s - start
+        ignition_request = bool(output.stage2_ignite)
     duration = float(propulsion["burn_duration_s"])
-    if not should_burn or elapsed < 0.0 or elapsed >= duration:
+    if (
+        ignition_request
+        and not body.engine_running
+        and body.engine_burn_elapsed_s < duration
+    ):
+        body.engine_running = True
+        body.engine_ignition_s = time_s
+        if body.engine_started_s is None:
+            body.engine_started_s = time_s
+    shutdown_request = bool(
+        output.abort
+        or (body.stage_index == 1 and output.stage2_shutdown)
+    )
+    if body.engine_running and shutdown_request:
+        body.engine_burn_elapsed_s += max(
+            time_s
+            - float(
+                body.engine_ignition_s
+                if body.engine_ignition_s is not None
+                else time_s
+            ),
+            0.0,
+        )
+        body.engine_running = False
+        body.engine_ignition_s = None
+    elapsed = body.engine_burn_elapsed_s + (
+        max(
+            time_s
+            - float(
+                body.engine_ignition_s
+                if body.engine_ignition_s is not None
+                else time_s
+            ),
+            0.0,
+        )
+        if body.engine_running
+        else 0.0
+    )
+    if body.engine_running and elapsed >= duration:
+        body.engine_burn_elapsed_s = duration
+        body.engine_running = False
+        body.engine_ignition_s = None
+    if not body.engine_running or elapsed < 0.0 or elapsed >= duration:
         return _record_engine_parameters(body, propulsion, 0.0, 0.0, 293.15)
     curve = propulsion.get("performance_curve")
     if curve:

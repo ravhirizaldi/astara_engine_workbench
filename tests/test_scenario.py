@@ -33,9 +33,9 @@ class ScenarioTests(unittest.TestCase):
         self.assertEqual(
             resolve_mission_events(scenario),
             {
-                "burnout_stage_1": 8.0,
-                "stage_separation": 8.5,
-                "stage2_ignition": 9.5,
+                "burnout_stage_1": 168.0,
+                "stage_separation": 170.0,
+                "stage2_ignition": 176.0,
             },
         )
 
@@ -85,6 +85,29 @@ class ScenarioTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "time_step_s"):
             validate_scenario(scenario)
 
+    def test_rejects_wrong_types_and_unsupported_semantics(self) -> None:
+        cases = []
+        scenario = default_scenario()
+        scenario["simulation"]["time_step_s"] = True
+        cases.append((scenario, "time_step_s"))
+        scenario = default_scenario()
+        scenario["sensors"]["imu_lever_arm_body_m"][0] = "zero"
+        cases.append((scenario, "imu_lever_arm_body_m"))
+        scenario = default_scenario()
+        scenario["mission"]["timeline"][2]["trigger"]["fact"] = "imaginary"
+        cases.append((scenario, "not supported"))
+        scenario = default_scenario()
+        scenario["vehicle"]["stages"][0]["propulsion"][
+            "performance_curve"
+        ][1]["thrust_n"] *= 0.5
+        cases.append((scenario, "inconsistent"))
+
+        for scenario, message in cases:
+            with self.subTest(message=message), self.assertRaisesRegex(
+                ValueError, message
+            ):
+                validate_scenario(scenario)
+
     def test_rejects_invalid_runtime_settings(self) -> None:
         cases = (
             ("simulation", "output_rate_hz", 0.0, "output_rate_hz"),
@@ -127,8 +150,8 @@ class ScenarioTests(unittest.TestCase):
 
     def test_rejects_invalid_fsw_command_and_channel_count(self) -> None:
         scenario = default_scenario()
-        scenario["mission"]["commands"][1]["time_s"] = 0.0
-        with self.assertRaisesRegex(ValueError, "commands times"):
+        scenario["mission"]["timeline"][1]["action"]["command"] = "FLY"
+        with self.assertRaisesRegex(ValueError, "action.command"):
             validate_scenario(scenario)
 
         scenario = default_scenario()
@@ -183,9 +206,10 @@ class ScenarioTests(unittest.TestCase):
 
     def test_rejects_curve_that_does_not_cover_burn(self) -> None:
         scenario = default_scenario()
-        scenario["vehicle"]["stages"][0]["propulsion"]["performance_curve"][-1][
-            "time_s"
-        ] = 7.9
+        propulsion = scenario["vehicle"]["stages"][0]["propulsion"]
+        propulsion["performance_curve"][-1]["time_s"] = (
+            propulsion["burn_duration_s"] - 0.1
+        )
         with self.assertRaisesRegex(ValueError, "must end at burn_duration_s"):
             validate_scenario(scenario)
 
@@ -220,28 +244,36 @@ class ScenarioTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicate id"):
             validate_scenario(scenario)
 
-    def test_rejects_cyclic_mission_events(self) -> None:
+    def test_rejects_cyclic_mission_timeline(self) -> None:
         scenario = default_scenario()
-        scenario["mission"]["events"] = [
+        scenario["mission"]["timeline"] = [
             {
-                "event": "stage_separation",
-                "trigger": "stage2_ignition",
-                "delay": 0.5,
+                "id": "stage_separation",
+                "trigger": {
+                    "type": "after_event",
+                    "event": "stage2_ignition",
+                    "delay_s": 0.5,
+                },
+                "action": {"type": "record"},
             },
             {
-                "event": "stage2_ignition",
-                "trigger": "stage_separation",
-                "delay": 1.0,
+                "id": "stage2_ignition",
+                "trigger": {
+                    "type": "after_event",
+                    "event": "stage_separation",
+                    "delay_s": 1.0,
+                },
+                "action": {"type": "record"},
             },
         ]
 
-        with self.assertRaisesRegex(ValueError, "cyclic or unknown"):
+        with self.assertRaisesRegex(ValueError, "dependency cycle"):
             validate_scenario(scenario)
 
-    def test_requires_mission_events(self) -> None:
+    def test_requires_mission_timeline(self) -> None:
         scenario = default_scenario()
-        scenario["mission"].pop("events")
-        with self.assertRaisesRegex(ValueError, "mission.events"):
+        scenario["mission"].pop("timeline")
+        with self.assertRaisesRegex(ValueError, "mission.timeline"):
             validate_scenario(scenario)
 
 

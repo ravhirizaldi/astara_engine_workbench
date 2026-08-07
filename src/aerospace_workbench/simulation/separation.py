@@ -43,6 +43,14 @@ def _split_stack(
         float(stages[1]["fuel_mass_kg"]),
         float(stages[1]["oxidizer_mass_kg"]),
     )
+    upper_stage.attached_payload_mass_kg = (
+        integrated_stack.attached_payload_mass_kg
+    )
+    upper_stage.attached_payload_position_m = max(
+        integrated_stack.attached_payload_position_m
+        - float(stages[0]["length_m"]),
+        0.0,
+    )
     core_offset_body = np.array(
         [core_stage.center_of_mass_m - parent_center_m, 0.0, 0.0]
     )

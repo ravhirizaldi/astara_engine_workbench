@@ -25,6 +25,13 @@ class SensorChannelState:
     barometer_bias_m: float
     gnss_position_bias_m: np.ndarray
     gnss_velocity_bias_m_s: np.ndarray
+    previous_body_rates_rad_s: np.ndarray = field(
+        default_factory=lambda: np.zeros(3)
+    )
+    barometer_port_altitude_m: float = 0.0
+    gnss_available_since_s: float | None = None
+    gnss_has_lock: bool = False
+    gnss_lost_lock: bool = False
     acceleration_body_m_s2: np.ndarray = field(
         default_factory=lambda: np.zeros(3)
     )
@@ -66,10 +73,10 @@ def fault_active(
     channel: int | None = None,
 ) -> dict[str, Any] | None:
     for fault in scenario.get("faults", []):
-        start = float(fault.get("start_s", 0.0))
-        end = start + float(fault.get("duration_s", math.inf))
         target = fault.get("component", fault.get("sensor"))
         if (
+            bool(fault.get("_active", False))
+            and
             fault.get("body", "all") in ("all", body)
             and target == component
             and (
@@ -77,7 +84,6 @@ def fault_active(
                 or "channel" not in fault
                 or int(fault["channel"]) == channel
             )
-            and start <= time_s <= end
         ):
             return fault
     return None
@@ -94,15 +100,14 @@ def sensor_faults(
         fault
         for fault in scenario.get("faults", [])
         if (
+            bool(fault.get("_active", False))
+            and
             fault.get("body", "all") in ("all", body)
             and fault.get("component", fault.get("sensor")) == sensor
             and (
                 "channel" not in fault
                 or int(fault["channel"]) == channel
             )
-            and float(fault.get("start_s", 0.0)) <= time_s
-            <= float(fault.get("start_s", 0.0))
-            + float(fault.get("duration_s", math.inf))
         )
     ]
 
@@ -176,6 +181,44 @@ def _channel_state(
             )
         )
     return body.sensor_channels[channel]
+
+
+def _temperature_delta_k(body: Body, sensors: dict[str, Any]) -> float:
+    nominal_k = float(sensors["nominal_sensor_temperature_k"])
+    temperature_k = nominal_k + float(
+        sensors["engine_temperature_coupling"]
+    ) * (float(body.last_engine_temperature_k) - nominal_k)
+    return temperature_k - nominal_k
+
+
+def _vector_model(
+    value: np.ndarray,
+    scale_error: list[float],
+    misalignment: list[list[float]],
+    temperature_coefficient: list[float],
+    temperature_delta_k: float,
+    quantization: float,
+    saturation: float,
+) -> np.ndarray:
+    modeled = np.asarray(misalignment, dtype=float) @ value
+    modeled *= 1.0 + np.asarray(scale_error, dtype=float)
+    modeled += (
+        np.asarray(temperature_coefficient, dtype=float)
+        * temperature_delta_k
+    )
+    if quantization > 0.0:
+        modeled = np.round(modeled / quantization) * quantization
+    return np.clip(modeled, -saturation, saturation)
+
+
+def _random_walk(
+    value: np.ndarray,
+    sigma_per_sqrt_s: float,
+    dt_s: float,
+    rng: np.random.Generator,
+) -> None:
+    if dt_s > 0.0 and sigma_per_sqrt_s > 0.0:
+        value += rng.normal(0.0, sigma_per_sqrt_s * math.sqrt(dt_s), 3)
 
 
 def _sensor_frame(
@@ -257,20 +300,88 @@ def _sample_device(
     state = _channel_state(body, sensors, rng, channel)
     faults = sensor_faults(scenario, body.name, device, time_s, channel)
     state.fault_state = tuple(str(fault.get("type")) for fault in faults)
+    temperature_delta_k = _temperature_delta_k(body, sensors)
     if device == "imu":
-        acceleration, imu_time, state.accel_valid = apply_sensor_faults(
+        sample_dt_s = (
+            max(time_s - state.imu_sample_time_s, 0.0)
+            if state.initialized
+            else 0.0
+        )
+        _random_walk(
+            state.accelerometer_bias_m_s2,
+            float(sensors["accelerometer_bias_random_walk_m_s2_sqrt_s"]),
+            sample_dt_s,
+            rng,
+        )
+        _random_walk(
+            state.gyro_bias_rad_s,
+            float(sensors["gyro_bias_random_walk_rad_s_sqrt_s"]),
+            sample_dt_s,
+            rng,
+        )
+        angular_acceleration = (
+            (body.body_rates_rad_s - state.previous_body_rates_rad_s)
+            / sample_dt_s
+            if sample_dt_s > 0.0
+            else np.zeros(3)
+        )
+        lever_arm = np.asarray(
+            sensors["imu_lever_arm_body_m"], dtype=float
+        )
+        lever_acceleration = np.cross(angular_acceleration, lever_arm)
+        lever_acceleration += np.cross(
+            body.body_rates_rad_s,
+            np.cross(body.body_rates_rad_s, lever_arm),
+        )
+        state.previous_body_rates_rad_s = body.body_rates_rad_s.copy()
+        vibration = np.linalg.norm(body.last_specific_force_body_m_s2)
+        acceleration_truth = (
             body.last_specific_force_body_m_s2
+            + lever_acceleration
             + state.accelerometer_bias_m_s2
-            + rng.normal(0.0, sensors["accelerometer_noise_m_s2"], 3),
+            + rng.normal(0.0, sensors["accelerometer_noise_m_s2"], 3)
+            + rng.normal(
+                0.0,
+                float(sensors["accelerometer_vibration_sensitivity"])
+                * vibration,
+                3,
+            )
+        )
+        gyro_truth = (
+            body.body_rates_rad_s
+            + state.gyro_bias_rad_s
+            + rng.normal(0.0, sensors["gyro_noise_rad_s"], 3)
+            + rng.normal(
+                0.0,
+                float(sensors["gyro_vibration_sensitivity"]) * vibration,
+                3,
+            )
+        )
+        acceleration, imu_time, state.accel_valid = apply_sensor_faults(
+            _vector_model(
+                acceleration_truth,
+                sensors["accelerometer_scale_factor_error"],
+                sensors["imu_cross_axis_misalignment"],
+                sensors["accelerometer_temperature_coefficient_m_s2_k"],
+                temperature_delta_k,
+                float(sensors["accelerometer_quantization_m_s2"]),
+                float(sensors["accelerometer_saturation_m_s2"]),
+            ),
             state.acceleration_body_m_s2,
             time_s,
             state.imu_sample_time_s,
             faults,
         )
         gyro, imu_time, state.gyro_valid = apply_sensor_faults(
-            body.body_rates_rad_s
-            + state.gyro_bias_rad_s
-            + rng.normal(0.0, sensors["gyro_noise_rad_s"], 3),
+            _vector_model(
+                gyro_truth,
+                sensors["gyro_scale_factor_error"],
+                sensors["imu_cross_axis_misalignment"],
+                sensors["gyro_temperature_coefficient_rad_s_k"],
+                temperature_delta_k,
+                float(sensors["gyro_quantization_rad_s"]),
+                float(sensors["gyro_saturation_rad_s"]),
+            ),
             state.gyro_body_rad_s,
             imu_time,
             state.imu_sample_time_s,
@@ -287,13 +398,35 @@ def _sample_device(
             "gyro_valid": state.gyro_valid,
         }
     if device == "magnetometer":
-        magnetic, sample_time_s, state.magnetometer_valid = apply_sensor_faults(
+        sample_dt_s = (
+            max(time_s - state.magnetometer_sample_time_s, 0.0)
+            if state.initialized
+            else 0.0
+        )
+        _random_walk(
+            state.magnetometer_bias,
+            float(sensors["magnetometer_bias_random_walk_sqrt_s"]),
+            sample_dt_s,
+            rng,
+        )
+        magnetic_truth = (
             quat_rotate(
                 quat_conjugate(body.attitude_wxyz),
                 unit(np.array([0.28, 0.08, -0.52])),
             )
             + state.magnetometer_bias
-            + rng.normal(0.0, float(sensors["magnetometer_noise"]), 3),
+            + rng.normal(0.0, float(sensors["magnetometer_noise"]), 3)
+        )
+        magnetic, sample_time_s, state.magnetometer_valid = apply_sensor_faults(
+            _vector_model(
+                magnetic_truth,
+                sensors["magnetometer_scale_factor_error"],
+                sensors["magnetometer_cross_axis_misalignment"],
+                sensors["magnetometer_temperature_coefficient_k"],
+                temperature_delta_k,
+                float(sensors["magnetometer_quantization"]),
+                float(sensors["magnetometer_saturation"]),
+            ),
             state.magnetic_body,
             time_s,
             state.magnetometer_sample_time_s,
@@ -310,12 +443,61 @@ def _sample_device(
         altitude = float(
             np.linalg.norm(body.position_ecef_m) - np.linalg.norm(launch_position)
         )
+        sample_dt_s = (
+            max(time_s - state.barometer_sample_time_s, 0.0)
+            if state.initialized
+            else 0.0
+        )
+        if sample_dt_s > 0.0:
+            state.barometer_bias_m += float(
+                rng.normal(
+                    0.0,
+                    float(sensors["barometer_bias_random_walk_m_sqrt_s"])
+                    * math.sqrt(sample_dt_s),
+                )
+            )
+        port_alpha = (
+            1.0
+            - math.exp(
+                -sample_dt_s / float(sensors["barometer_port_time_constant_s"])
+            )
+            if sample_dt_s > 0.0
+            else 1.0
+        )
+        state.barometer_port_altitude_m += port_alpha * (
+            altitude - state.barometer_port_altitude_m
+        )
+        sensor_alpha = (
+            1.0
+            - math.exp(
+                -sample_dt_s / float(sensors["barometer_lag_time_constant_s"])
+            )
+            if sample_dt_s > 0.0
+            else 1.0
+        )
+        raw_altitude = (
+            state.barometer_port_altitude_m
+            + state.barometer_bias_m
+            + float(sensors["barometer_temperature_coefficient_m_k"])
+            * temperature_delta_k
+            + rng.normal(0.0, sensors["barometer_noise_m"])
+        )
+        lagged_altitude = state.barometric_altitude_m + sensor_alpha * (
+            raw_altitude - state.barometric_altitude_m
+        )
+        quantum = float(sensors["barometer_quantization_m"])
+        if quantum > 0.0:
+            lagged_altitude = round(lagged_altitude / quantum) * quantum
         value, sample_time_s, state.barometer_valid = apply_sensor_faults(
             np.array(
                 [
-                    altitude
-                    + state.barometer_bias_m
-                    + rng.normal(0.0, sensors["barometer_noise_m"])
+                    min(
+                        max(
+                            lagged_altitude,
+                            float(sensors["barometer_min_altitude_m"]),
+                        ),
+                        float(sensors["barometer_max_altitude_m"]),
+                    )
                 ]
             ),
             np.array([state.barometric_altitude_m]),
@@ -331,17 +513,70 @@ def _sample_device(
             "barometer_valid": state.barometer_valid,
         }
     if device == "gnss":
+        dropout = any(fault.get("type") == "dropout" for fault in faults)
+        if dropout:
+            state.gnss_has_lock = False
+            state.gnss_lost_lock = True
+            state.gnss_available_since_s = None
+        elif not state.gnss_has_lock:
+            if state.gnss_available_since_s is None:
+                state.gnss_available_since_s = time_s
+            acquisition_s = float(
+                sensors[
+                    "gnss_reacquisition_time_s"
+                    if state.gnss_lost_lock
+                    else "gnss_acquisition_time_s"
+                ]
+            )
+            state.gnss_has_lock = (
+                time_s - state.gnss_available_since_s + 1e-12
+                >= acquisition_s
+            )
+        sample_dt_s = (
+            max(time_s - state.gnss_sample_time_s, 0.0)
+            if state.initialized
+            else 0.0
+        )
+        _random_walk(
+            state.gnss_position_bias_m,
+            float(sensors["gnss_position_bias_random_walk_m_sqrt_s"]),
+            sample_dt_s,
+            rng,
+        )
+        _random_walk(
+            state.gnss_velocity_bias_m_s,
+            float(sensors["gnss_velocity_bias_random_walk_m_s_sqrt_s"]),
+            sample_dt_s,
+            rng,
+        )
+        position = (
+            body.position_ecef_m
+            + state.gnss_position_bias_m
+            + rng.normal(0.0, sensors["gnss_position_noise_m"], 3)
+        ) * (
+            1.0
+            + np.asarray(
+                sensors["gnss_position_scale_factor_error"], dtype=float
+            )
+        )
+        velocity = (
+            body.velocity_ecef_m_s
+            + state.gnss_velocity_bias_m_s
+            + rng.normal(0.0, sensors["gnss_velocity_noise_m_s"], 3)
+        ) * (
+            1.0
+            + np.asarray(
+                sensors["gnss_velocity_scale_factor_error"], dtype=float
+            )
+        )
+        position_quantum = float(sensors["gnss_position_quantization_m"])
+        velocity_quantum = float(sensors["gnss_velocity_quantization_m_s"])
+        if position_quantum > 0.0:
+            position = np.round(position / position_quantum) * position_quantum
+        if velocity_quantum > 0.0:
+            velocity = np.round(velocity / velocity_quantum) * velocity_quantum
         value, sample_time_s, state.gnss_valid = apply_sensor_faults(
-            np.concatenate(
-                (
-                    body.position_ecef_m
-                    + state.gnss_position_bias_m
-                    + rng.normal(0.0, sensors["gnss_position_noise_m"], 3),
-                    body.velocity_ecef_m_s
-                    + state.gnss_velocity_bias_m_s
-                    + rng.normal(0.0, sensors["gnss_velocity_noise_m_s"], 3),
-                )
-            ),
+            np.concatenate((position, velocity)),
             np.concatenate(
                 (state.gnss_position_ecef_m, state.gnss_velocity_ecef_m_s)
             ),
@@ -349,6 +584,7 @@ def _sample_device(
             state.gnss_sample_time_s,
             faults,
         )
+        state.gnss_valid &= int(state.gnss_has_lock)
         state.gnss_position_ecef_m = value[:3].copy()
         state.gnss_velocity_ecef_m_s = value[3:].copy()
         state.gnss_sample_time_s = sample_time_s

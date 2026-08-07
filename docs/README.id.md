@@ -24,6 +24,30 @@ pip install -r requirements.lock
 python3 main.py
 ```
 
+GUI Qt menjalankan solver di proses terpisah. Tampilan utama memuat lintasan,
+metrik langsung, serta tiga panel ringan untuk ketinggian, kecepatan, dan gaya
+dorong. Data tampilan dibatasi dan diperbarui lebih lambat daripada metrik agar
+GUI tetap responsif; telemetri lengkap tetap ditulis oleh solver ke laporan.
+
+Rendering CPU adalah pengaturan baku dan paling stabil di WSL. OpenGL hanya
+diaktifkan secara eksplisit pada komputer dengan driver EGL/OpenGL yang bekerja:
+
+```bash
+ASTARA_UI_OPENGL=1 python3 main.py
+```
+
+Jika muncul galat Mesa, EGL, atau Zink, gunakan kembali CPU:
+
+```bash
+ASTARA_UI_OPENGL=0 python3 main.py
+```
+
+Dock **Fault Injection** dapat menyuntikkan gangguan sensor atau mesin ketika
+simulasi desktop sedang berjalan. Pilih wahana, komponen, jenis gangguan, nilai
+jika diperlukan, dan durasi. Durasi nol tetap aktif sampai **Clear** ditekan.
+Semua perintah divalidasi dan dicatat sebagai kejadian simulasi; berkas skenario
+dan kendaraan yang tersimpan tidak diubah.
+
 Menjalankan simulasi tanpa GUI:
 
 ```bash

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass
+from collections import deque
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 import numpy as np
@@ -34,6 +35,7 @@ from .scheduling import (
     TaskScheduler,
     TimingProfile,
 )
+from .event_queue import ScheduledEvent
 from .sensors import (
     _frame_from_values,
     _sample_device,
@@ -76,6 +78,7 @@ class _AvionicsRuntime:
     last_task_time_s: float | None = None
     last_deadline_missed: bool = False
     reported_execution_time_s: float = 0.0
+    pending_commands: deque[tuple[int, float]] = field(default_factory=deque)
 
 
 def _scheduler_seed(seed: int, body_name: str, subsystem: str) -> int:
@@ -94,10 +97,12 @@ def _avionics_runtime(
     initial_received: list[dict[str, Any]] | None = None,
     initial_device_received: dict[str, dict[str, Any]] | None = None,
     record_timeline: bool = True,
+    queue: EventQueue | None = None,
+    clock: SimulationClock | None = None,
 ) -> _AvionicsRuntime:
-    queue = EventQueue()
-    devices = DeviceScheduler(queue)
-    tasks = TaskScheduler(queue)
+    queue = queue if queue is not None else EventQueue()
+    devices = DeviceScheduler(queue, body_name)
+    tasks = TaskScheduler(queue, body_name)
     avionics = scenario["avionics"]
     for name, values in avionics["devices"].items():
         devices.add(
@@ -121,7 +126,7 @@ def _avionics_runtime(
     )
     tasks.start("fsw", start_s)
     return _AvionicsRuntime(
-        SimulationClock(start_s),
+        clock or SimulationClock(start_s),
         queue,
         devices,
         tasks,
@@ -130,6 +135,7 @@ def _avionics_runtime(
             "sensor_bus",
             TimingProfile.from_mapping(avionics["buses"]["sensor_bus"]),
             _scheduler_seed(seed, body_name, "sensor_bus"),
+            body_name,
         ),
         (
             copy.deepcopy(initial_received)
@@ -178,12 +184,17 @@ def _sample_device_model(
     model = avionics.models[name]
     fault = _fault_active(scenario, body.name, name, sample_time_s)
     if isinstance(model, FlightComputerPlatformModel):
+        scheduled_command = (
+            avionics.pending_commands.popleft()
+            if avionics.pending_commands
+            else None
+        )
         return model.sample(
             sample_time_s,
             avionics.reported_execution_time_s,
             avionics.last_deadline_missed,
             True,
-            core.next_scheduled_command(sample_time_s),
+            scheduled_command,
             fault,
         )
     return model.sample(body, sample_time_s, fault)
@@ -202,6 +213,25 @@ def _fresh_device_sample(
         and -1e-12 <= age_s <= avionics.models[name].timeout_s + 1e-12
     )
     return sample
+
+
+def _store_device_measurement(
+    avionics: _AvionicsRuntime,
+    device: str,
+    measurement: dict[str, Any],
+) -> None:
+    received = dict(measurement)
+    previous = avionics.received_devices.get(device, {})
+    if (
+        device == "flight_computer_platform"
+        and int(received.get("command_type", FSW_COMMAND_NONE))
+        == FSW_COMMAND_NONE
+        and int(previous.get("command_type", FSW_COMMAND_NONE))
+        != FSW_COMMAND_NONE
+    ):
+        received["command_type"] = previous["command_type"]
+        received["command_issue_time_s"] = previous["command_issue_time_s"]
+    avionics.received_devices[device] = received
 
 
 def _device_inputs(
@@ -360,8 +390,10 @@ def _run_fsw_substeps(
         elif scheduled.kind == "bus_receive":
             device = str(scheduled.payload["device"])
             if device in avionics.models:
-                avionics.received_devices[device] = dict(
-                    scheduled.payload["measurement"]
+                _store_device_measurement(
+                    avionics,
+                    device,
+                    scheduled.payload["measurement"],
                 )
             else:
                 for received, measurement in zip(
@@ -446,4 +478,174 @@ def _run_fsw_substeps(
         elif scheduled.kind == "task_publish":
             output = scheduled.payload["output"]
             shadow_output = scheduled.payload["shadow_output"]
+    return output, shadow_output
+
+
+def queue_fsw_command(
+    avionics: _AvionicsRuntime,
+    command_type: int,
+    issue_time_s: float,
+) -> None:
+    avionics.pending_commands.append((command_type, issue_time_s))
+
+
+def handle_avionics_event(
+    core: FlightCore,
+    body: Body,
+    scenario: dict[str, Any],
+    rng: np.random.Generator,
+    launch_position: np.ndarray,
+    separated: bool,
+    current_output: FswOutput,
+    avionics: _AvionicsRuntime,
+    scheduled: ScheduledEvent,
+    on_sensor: Callable[
+        [str, list[SensorFrame], FswOutput], None
+    ] | None = None,
+    timing_mode: str = "deterministic",
+    injected_execution_time_s: float | None = None,
+    shadow_core: FlightCore | None = None,
+    shadow_output: FswOutput | None = None,
+) -> tuple[FswOutput, FswOutput | None]:
+    """Process one globally scheduled avionics event."""
+    timing_override_s = (
+        None
+        if timing_mode == "measured"
+        else injected_execution_time_s if timing_mode == "injected" else 0.0
+    )
+    output = current_output
+    if scheduled.kind == "device_sample":
+        avionics.devices.released(scheduled)
+        payload = {
+            "body": body.name,
+            "device": scheduled.subsystem,
+            "truth_time_s": scheduled.truth_time_s,
+            "sensor_sample_time_s": scheduled.truth_time_s,
+        }
+        if scheduled.subsystem in avionics.models:
+            payload["measurement"] = _sample_device_model(
+                core,
+                body,
+                scenario,
+                avionics,
+                scheduled.subsystem,
+                scheduled.truth_time_s,
+            )
+        else:
+            payload["measurements"] = [
+                _sample_device(
+                    body,
+                    scenario,
+                    rng,
+                    scheduled.truth_time_s,
+                    launch_position,
+                    channel,
+                    scheduled.subsystem,
+                )
+                for channel in range(len(avionics.received))
+            ]
+        if avionics.devices.complete(scheduled, payload) is None:
+            _record_avionics_timeline(
+                avionics, payload, scheduled.subsystem
+            )
+    elif scheduled.kind == "device_complete":
+        device_profile = avionics.devices.profiles[
+            str(scheduled.payload["device"])
+        ]
+        if (
+            avionics.bus.submit(
+                scheduled, device_profile.publication_delay_s
+            )
+            is None
+        ):
+            _record_avionics_timeline(
+                avionics,
+                scheduled.payload,
+                str(scheduled.payload["device"]),
+            )
+    elif scheduled.kind == "bus_publish":
+        avionics.bus.published(scheduled)
+    elif scheduled.kind == "bus_receive":
+        device = str(scheduled.payload["device"])
+        if device in avionics.models:
+            _store_device_measurement(
+                avionics,
+                device,
+                scheduled.payload["measurement"],
+            )
+        else:
+            for received, measurement in zip(
+                avionics.received,
+                scheduled.payload["measurements"],
+                strict=True,
+            ):
+                received.update(measurement)
+        _record_avionics_timeline(avionics, scheduled.payload, device)
+    elif scheduled.kind == "task_release":
+        avionics.tasks.released(scheduled)
+        tick = scheduled.payload["tick"]
+        frames = [
+            _frame_from_values(
+                body,
+                scenario,
+                rng,
+                scheduled.truth_time_s,
+                tick.dt_s,
+                separated,
+                received,
+            )
+            for received in avionics.received
+        ]
+        inputs = _device_inputs(avionics, scheduled.truth_time_s)
+        _apply_device_inputs(frames, inputs)
+        avionics.tasks.complete(
+            scheduled,
+            {"frames": frames, "device_inputs": inputs},
+        )
+    elif scheduled.kind == "task_complete":
+        frames = scheduled.payload["frames"]
+        deadline_missed = (
+            bool(scheduled.payload["deadline_missed"])
+            if timing_mode == "deterministic"
+            else None
+        )
+        completed_output = core.step(
+            frames[0],
+            device_inputs=scheduled.payload["device_inputs"],
+            sensor_channels=frames[1:],
+        )
+        avionics.reported_execution_time_s = (
+            core.previous_execution_time_s
+            if timing_override_s is None
+            else timing_override_s
+        )
+        avionics.last_deadline_missed = bool(
+            deadline_missed
+            if deadline_missed is not None
+            else avionics.reported_execution_time_s > core.loop_deadline_s
+        )
+        avionics.last_task_time_s = float(
+            scheduled.payload["task_release_time_s"]
+        )
+        completed_shadow = shadow_output
+        if shadow_core is not None:
+            completed_shadow = shadow_core.step(
+                frames[0],
+                device_inputs=scheduled.payload["device_inputs"],
+                sensor_channels=frames[1:],
+            )
+        if on_sensor:
+            on_sensor(body.name, frames, completed_output)
+        avionics.tasks.publish(
+            scheduled,
+            {
+                "output": completed_output,
+                "shadow_output": completed_shadow,
+            },
+        )
+    elif scheduled.kind == "task_publish":
+        output = scheduled.payload["output"]
+        shadow_output = scheduled.payload["shadow_output"]
+    else:
+        raise ValueError(f"unsupported avionics event kind {scheduled.kind!r}")
     return output, shadow_output

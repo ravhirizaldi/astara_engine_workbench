@@ -58,7 +58,7 @@ def initial_attitude(position_ecef: np.ndarray, azimuth_deg: float) -> np.ndarra
     up = -down
     azimuth = math.radians(azimuth_deg)
     body_x = up
-    body_y = math.cos(azimuth) * east - math.sin(azimuth) * north
+    body_y = math.sin(azimuth) * north - math.cos(azimuth) * east
     body_z = unit(cross3(body_x, body_y))
     return quat_from_matrix(np.column_stack((body_x, body_y, body_z)))
 

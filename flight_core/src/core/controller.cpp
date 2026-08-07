@@ -56,6 +56,7 @@ void begin_step(Context& context, const FswSensorSuite& sensors) {
     context.faults.changed_fault_flags = 0;
     context.control.stage1_ignite_request = false;
     context.control.stage2_ignite_request = false;
+    context.control.stage2_shutdown_request = false;
     context.mission.discrete_actuation = {};
     context.mission.previous_mode = context.mission.mode;
 }

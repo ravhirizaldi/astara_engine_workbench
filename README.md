@@ -56,6 +56,49 @@ Launch the desktop Workbench:
 python3 main.py
 ```
 
+The Qt mission console keeps controls, event history, live metrics, vehicle
+tracks, and altitude/speed/thrust strips in one view. After staging, each body
+keeps its own colored trail and vector marker. The Configuration panel edits
+and validates complete scenario and vehicle JSON working copies; **Save As**
+writes a new paired configuration so the reference files remain unchanged.
+
+The desktop solver runs in a worker process. The GUI receives only compact
+display rows through a bounded queue; complete telemetry and reports are
+written by the worker. Live metrics refresh at 30 Hz, while the trajectory and
+the three lightweight strips refresh at 12 Hz from a mission-aware display
+budget of at most 2,001 points per body. Display sampling does not change the
+simulation timestep, Flight Core inputs, or persisted evidence.
+
+CPU rendering is the reliable default, including under WSL. Qt OpenGL can be
+enabled explicitly on a host with working EGL/OpenGL drivers:
+
+```bash
+ASTARA_UI_OPENGL=1 python3 main.py
+```
+
+If Mesa, EGL, or Zink reports a driver error, return to the optimized CPU path:
+
+```bash
+ASTARA_UI_OPENGL=0 python3 main.py
+```
+
+The header reports `CPU VIEW` or `OPENGL VIEW`; this affects presentation only.
+
+### Live fault injection
+
+The **Fault Injection** dock is available during an active desktop run. Select
+the body, component, fault type, value when required, and duration, then choose
+**Inject**. A zero duration remains active until **Clear**. Sensor faults apply
+to all channels of the selected sensor. Engine faults apply to the selected
+body's engine set. **Clear** removes operator-injected faults only; configured
+timeline faults remain under scenario control.
+
+Supported live sensor faults are dropout, stale, freeze, stuck-valid, bias,
+and scale error. Supported engine faults are cutoff, thrust scale, and
+overtemperature. Commands are validated at both the GUI and worker boundary.
+Injection, rejection, and clearing are recorded as mission events. Live faults
+do not modify the saved scenario or vehicle files.
+
 The application is supported as a repository-run tool. See
 [docs/PACKAGING.md](docs/PACKAGING.md) for the packaging boundary.
 
@@ -100,34 +143,42 @@ It references
 
 | Document | Owns | Required schema |
 |---|---|---|
-| Scenario | Simulation rate and seed, launch environment, mission events, commands, guidance, faults, uncertainty, and analysis settings | `aerospace-workbench.scenario.v1` |
-| Vehicle | Stage geometry and mass, propulsion, aerodynamics, recovery, sensor models, and actuators | `aerospace-workbench.vehicle.v2` |
+| Scenario | Simulation rate and seed, launch environment, typed mission timeline, guidance, faults, orbit target, payload, uncertainty, and analysis settings | `aerospace-workbench.scenario.v2` |
+| Vehicle | Stage geometry and mass, propulsion, aerodynamics, recovery, Flight Core parameters, sensor models, and actuator dynamics | `aerospace-workbench.vehicle.v2` |
 
 All quantities use SI units unless the field name explicitly says otherwise.
 Missing or mismatched schema identifiers are rejected. Scenario files must use
 `vehicle_definition`; inline vehicle definitions are not accepted.
 
-Mission sequencing is dependency-based:
+Mission sequencing is event-driven:
 
 ```json
 {
-  "events": [
+  "timeline": [
     {
-      "event": "stage_separation",
-      "trigger": "burnout_stage_1",
-      "delay": 0.5
+      "id": "launch_command",
+      "trigger": {"type": "time", "at_s": 0.03},
+      "action": {
+        "type": "fsw_command",
+        "command": "LAUNCH",
+        "target": "integrated_stack"
+      }
     },
     {
-      "event": "stage2_ignition",
-      "trigger": "stage_separation",
-      "delay": 1.0
+      "id": "stage_separation",
+      "trigger": {"type": "fsw_fact", "fact": "stage_separation"},
+      "action": {"type": "split_stage"}
     }
   ]
 }
 ```
 
-Event order in the file does not control execution. Duplicate events, missing
-triggers, negative delays, and dependency cycles are rejected.
+Timeline triggers may use scenario time, another event, a Flight Core fact, or
+a truth detector. The single stable event queue also schedules physics,
+devices, FSW tasks, bus delivery, faults, and evidence capture. Same-time
+events use an explicit priority followed by insertion order. Duplicate IDs,
+missing dependencies, invalid actions, negative delays, and dependency cycles
+are rejected.
 
 ## Run Evidence
 

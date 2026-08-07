@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import numpy as np
@@ -10,7 +11,6 @@ from ..mathematics.frames import (
     EARTH_MU,
     EARTH_RADIUS_M,
     EARTH_ROTATION_RAD_S,
-    initial_attitude,
     ned_to_ecef,
 )
 from ..mathematics.quaternions import (
@@ -29,6 +29,7 @@ def _forces(
     body: Body,
     scenario: dict[str, Any],
     state: np.ndarray,
+    aerodynamic_stage: dict[str, Any],
     thrust_n: float,
     tvc_rad: np.ndarray,
     fin_commands: np.ndarray,
@@ -50,11 +51,11 @@ def _forces(
         rates,
         density,
         sound_speed,
-        body.aerodynamic_stage(),
+        aerodynamic_stage,
         fin_commands,
     )
     pitch, yaw = tvc_rad
-    cg = float(body.aerodynamic_stage()["center_of_mass_m"])
+    cg = float(aerodynamic_stage["center_of_mass_m"])
     thrust_body = np.zeros(3)
     thrust_moment = np.zeros(3)
     for engine in _stage_engines(body.stage):
@@ -65,12 +66,31 @@ def _forces(
         direction = unit(direction, np.array([1.0, 0.0, 0.0]))
         engine_force = engine_thrust * direction
         thrust_body += engine_force
-        position = np.asarray(engine["position_body_m"], dtype=float)
-        lever = position - np.array([cg, 0.0, 0.0])
+        engine_position = np.asarray(
+            engine["position_body_m"], dtype=float
+        )
+        lever = engine_position - np.array([cg, 0.0, 0.0])
         thrust_moment += cross3(lever, engine_force)
     force_body = aero.force_body_n + thrust_body
+    reaction_torque = float(
+        body.stage.get("reaction_control_torque_nm_per_rad", 0.0)
+    )
+    if reaction_torque > 0.0 and thrust_n <= 0.0:
+        reaction_moment = reaction_torque * np.array(
+            [0.0, tvc_rad[0], tvc_rad[1]]
+        )
+        reaction_moment -= float(
+            body.stage.get("reaction_control_damping_nm_s", 0.0)
+        ) * rates
+        maximum_reaction_torque = float(
+            body.stage.get("reaction_control_max_torque_nm", math.inf)
+        )
+        thrust_moment += np.clip(
+            reaction_moment,
+            -maximum_reaction_torque,
+            maximum_reaction_torque,
+        )
     force_ecef = quat_rotate(quaternion, force_body)
-
     recovery = body.stage["recovery"]
     parachute_area = 0.0
     if body.main_deployed:
@@ -106,13 +126,30 @@ def _derivative(
     tvc_rad: np.ndarray,
     fin_commands: np.ndarray,
     time_s: float,
+    *,
+    mass_kg: float | None = None,
+    inertia_kg_m2: np.ndarray | None = None,
+    aerodynamic_stage: dict[str, Any] | None = None,
 ) -> np.ndarray:
+    if mass_kg is None:
+        mass_kg = body.mass_kg
+    if inertia_kg_m2 is None:
+        inertia_kg_m2 = body.inertia_kg_m2
+    if aerodynamic_stage is None:
+        aerodynamic_stage = body.aerodynamic_stage()
     position = state[0:3]
     velocity = state[3:6]
     quaternion = quat_normalize(state[6:10])
     rates = state[10:13]
     force_ecef, _aero, moment_body = _forces(
-        body, scenario, state, thrust_n, tvc_rad, fin_commands, time_s
+        body,
+        scenario,
+        state,
+        aerodynamic_stage,
+        thrust_n,
+        tvc_rad,
+        fin_commands,
+        time_s,
     )
     radius = max(float(np.linalg.norm(position)), EARTH_RADIUS_M)
     earth_rate = np.array([0.0, 0.0, EARTH_ROTATION_RAD_S])
@@ -121,11 +158,10 @@ def _derivative(
     rotating_terms = -2.0 * cross3(earth_rate, velocity) - cross3(
         earth_rate, cross3(earth_rate, position)
     )
-    acceleration = gravity + rotating_terms + force_ecef / body.mass_kg
-    inertia = body.inertia_kg_m2
+    acceleration = gravity + rotating_terms + force_ecef / mass_kg
     rates_dot = (
-        moment_body - cross3(rates, inertia * rates)
-    ) / inertia
+        moment_body - cross3(rates, inertia_kg_m2 * rates)
+    ) / inertia_kg_m2
     return np.concatenate(
         (
             velocity,
@@ -145,6 +181,8 @@ def _integrate_body(
     time_s: float,
     dt_s: float,
     launch_position: np.ndarray,
+    launch_attitude: np.ndarray,
+    rail_axis: np.ndarray,
 ) -> AeroResult:
     if body.landed:
         return AeroResult(np.zeros(3), np.zeros(3), 0.0, 0.0, 0.0, True)
@@ -152,27 +190,22 @@ def _integrate_body(
     constrained_to_rail = (
         body.upper_mass_kg > 0.0 and body.rail_exit_s is None
     )
-    rail_attitude = initial_attitude(
-        launch_position,
-        scenario["environment"]["launch_azimuth_deg"],
-    )
-    rail_axis = quat_rotate(
-        rail_attitude, np.array([1.0, 0.0, 0.0])
-    )
+    mass_kg = body.mass_kg
+    aerodynamic_stage = body.aerodynamic_stage()
     if constrained_to_rail and body.hold_down_released_s is None:
         gravity_m_s2 = EARTH_MU / float(np.linalg.norm(launch_position)) ** 2
         release = rail["hold_down_release"]
         if (
             thrust_n
             < float(release["minimum_thrust_to_weight"])
-            * body.mass_kg
+            * mass_kg
             * gravity_m_s2
         ):
             body.position_ecef_m = launch_position.copy()
             body.velocity_ecef_m_s[:] = 0.0
-            body.attitude_wxyz = rail_attitude
+            body.attitude_wxyz = launch_attitude
             body.body_rates_rad_s = quat_rotate(
-                quat_conjugate(rail_attitude),
+                quat_conjugate(launch_attitude),
                 np.array([0.0, 0.0, EARTH_ROTATION_RAD_S]),
             )
             _force, aero, _moment = _forces(
@@ -186,6 +219,7 @@ def _integrate_body(
                         body.body_rates_rad_s,
                     )
                 ),
+                aerodynamic_stage,
                 thrust_n,
                 tvc_rad,
                 fin_commands,
@@ -205,6 +239,7 @@ def _integrate_body(
             body.body_rates_rad_s,
         )
     )
+    inertia_kg_m2 = body.inertia_kg_m2
     derivative = lambda value, offset: _derivative(  # noqa: E731
         body,
         scenario,
@@ -213,6 +248,9 @@ def _integrate_body(
         tvc_rad,
         fin_commands,
         time_s + offset,
+        mass_kg=mass_kg,
+        inertia_kg_m2=inertia_kg_m2,
+        aerodynamic_stage=aerodynamic_stage,
     )
     k1 = derivative(state, 0.0)
     k2 = derivative(state + 0.5 * dt_s * k1, 0.5 * dt_s)
@@ -245,9 +283,9 @@ def _integrate_body(
         )
         next_state[0:3] = launch_position + progress_m * rail_axis
         next_state[3:6] = axial_speed * rail_axis
-        next_state[6:10] = rail_attitude
+        next_state[6:10] = launch_attitude
         next_state[10:13] = quat_rotate(
-            quat_conjugate(rail_attitude),
+            quat_conjugate(launch_attitude),
             np.array([0.0, 0.0, EARTH_ROTATION_RAD_S]),
         )
         last_button_m = min(float(value) for value in rail["button_positions_m"])
@@ -259,10 +297,17 @@ def _integrate_body(
     body.attitude_wxyz = next_state[6:10]
     body.body_rates_rad_s = next_state[10:13]
     force_ecef, aero, _moment = _forces(
-        body, scenario, next_state, thrust_n, tvc_rad, fin_commands, time_s + dt_s
+        body,
+        scenario,
+        next_state,
+        aerodynamic_stage,
+        thrust_n,
+        tvc_rad,
+        fin_commands,
+        time_s + dt_s,
     )
     body.last_specific_force_body_m_s2 = quat_rotate(
-        quat_conjugate(body.attitude_wxyz), force_ecef / body.mass_kg
+        quat_conjugate(body.attitude_wxyz), force_ecef / mass_kg
     )
     body.last_dynamic_pressure_pa = aero.dynamic_pressure_pa
     body.last_mach = aero.mach

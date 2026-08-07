@@ -7,7 +7,7 @@ import ctypes
 FSW_MAX_GUIDANCE_POINTS = 32
 FSW_MAX_SENSOR_CHANNELS = 3
 FSW_FAULT_COUNT = 21
-FSW_ABI_VERSION = 0x00080000
+FSW_ABI_VERSION = 0x00090000
 FSW_BODY_INTEGRATED = 0
 FSW_BODY_CORE = 1
 FSW_BODY_UPPER = 2
@@ -20,6 +20,7 @@ FSW_COMMAND_CLEAR_FAULTS = 5
 FSW_DISCRETE_ACTION_STAGE_SEPARATE = 1
 FSW_DISCRETE_ACTION_DEPLOY_DROGUE = 2
 FSW_DISCRETE_ACTION_DEPLOY_MAIN = 3
+FSW_DISCRETE_ACTION_DEPLOY_PAYLOAD = 4
 
 
 class GuidancePoint(ctypes.Structure):
@@ -100,6 +101,25 @@ class FswConfig(ctypes.Structure):
         ("max_velocity_sigma_m_s", ctypes.c_double),
         ("max_attitude_sigma_rad", ctypes.c_double),
         ("launch_azimuth_rad", ctypes.c_double),
+        ("launch_acceleration_threshold_m_s2", ctypes.c_double),
+        ("launch_persistence_s", ctypes.c_double),
+        ("burnout_acceleration_threshold_m_s2", ctypes.c_double),
+        ("burnout_persistence_s", ctypes.c_double),
+        ("apogee_min_altitude_m", ctypes.c_double),
+        ("apogee_descent_velocity_m_s", ctypes.c_double),
+        ("apogee_persistence_s", ctypes.c_double),
+        ("landing_altitude_m", ctypes.c_double),
+        ("landing_speed_m_s", ctypes.c_double),
+        ("landing_persistence_s", ctypes.c_double),
+        ("aero_reference_dynamic_pressure_pa", ctypes.c_double),
+        ("aero_high_q_authority_scale", ctypes.c_double),
+        ("orbit_target_altitude_m", ctypes.c_double),
+        ("orbit_altitude_tolerance_m", ctypes.c_double),
+        ("orbit_cutoff_speed_margin_m_s", ctypes.c_double),
+        ("orbit_radial_velocity_tolerance_m_s", ctypes.c_double),
+        ("circularization_max_burn_s", ctypes.c_double),
+        ("payload_deploy_delay_s", ctypes.c_double),
+        ("orbit_enabled", ctypes.c_int32),
         ("guidance_count", ctypes.c_uint32),
         ("guidance", GuidancePoint * FSW_MAX_GUIDANCE_POINTS),
         ("body_role", ctypes.c_int32),
@@ -271,8 +291,10 @@ class FswOutput(ctypes.Structure):
         ("stage1_ignite", ctypes.c_int32),
         ("stage_separate", ctypes.c_int32),
         ("stage2_ignite", ctypes.c_int32),
+        ("stage2_shutdown", ctypes.c_int32),
         ("deploy_drogue", ctypes.c_int32),
         ("deploy_main", ctypes.c_int32),
+        ("deploy_payload", ctypes.c_int32),
         ("abort", ctypes.c_int32),
         ("attitude_valid", ctypes.c_int32),
         ("command_sequence", ctypes.c_uint64),
@@ -350,6 +372,9 @@ MODE_NAMES = (
     "MAIN",
     "LANDED",
     "ABORT",
+    "ORBIT_INSERTION",
+    "ORBIT",
+    "PAYLOAD_DEPLOYED",
 )
 
 NAVIGATION_STATUS_NAMES = ("NOMINAL", "DEGRADED", "INERTIAL")

@@ -68,9 +68,29 @@ void test_invalid_navigation_is_zero_safe() {
     REQUIRE(output.fin_yaw_rad == 0.0);
 }
 
+void test_orbit_control_tracks_inertial_prograde() {
+    auto config = default_config();
+    config.orbit_enabled = 1;
+    auto context = control_context(config);
+    context.mission.mode = FSW_MODE_COAST;
+    context.navigation.position_ecef = {kEarthRadiusM, 0.0, 0.0};
+    context.navigation.velocity_ecef = {0.0, 1000.0, 0.0};
+    auto input = input_at(5.0);
+    input.air_data.valid = 0;
+    FswOutput output{};
+    fsw::internal::calculate_controls(context, input, output);
+    REQUIRE(output.tvc_yaw_rad > 0.0);
+
+    context.navigation.velocity_ecef[1] = -1000.0;
+    output = {};
+    fsw::internal::calculate_controls(context, input, output);
+    REQUIRE(output.tvc_yaw_rad < 0.0);
+}
+
 int main() {
     test_guidance_and_attitude_error_response();
     test_rate_damping_and_saturation();
     test_invalid_navigation_is_zero_safe();
+    test_orbit_control_tracks_inertial_prograde();
     return EXIT_SUCCESS;
 }

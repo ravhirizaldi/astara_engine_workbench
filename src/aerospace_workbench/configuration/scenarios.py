@@ -5,7 +5,6 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-import math
 from pathlib import Path
 from typing import Any
 
@@ -70,15 +69,26 @@ def load_scenario_documents(
 def load_scenario(path: str | Path | None = None) -> dict[str, Any]:
     source = resolve_scenario_path(path)
     scenario, vehicle, vehicle_path = load_scenario_documents(source)
-    loaded = _LoadedScenario(
+    return scenario_from_documents(
         scenario,
-        {
-            "scenario": source,
-            "vehicle": vehicle_path,
-        },
         vehicle,
+        {"scenario": source, "vehicle": vehicle_path},
     )
-    merge_vehicle_definition(loaded, vehicle)
+
+
+def scenario_from_documents(
+    scenario_document: dict[str, Any],
+    vehicle_document: dict[str, Any],
+    source_files: dict[str, Path] | None = None,
+) -> dict[str, Any]:
+    """Build one validated runtime scenario from editable source documents."""
+    loaded = _LoadedScenario(
+        copy.deepcopy(scenario_document),
+        dict(source_files or {}),
+        vehicle_document,
+    )
+    require_schema_version(loaded, SCENARIO_SCHEMA_VERSION)
+    merge_vehicle_definition(loaded, copy.deepcopy(vehicle_document))
     from .validation import validate_scenario
 
     validate_scenario(loaded)
@@ -112,65 +122,26 @@ def configuration_source_files(scenario: dict[str, Any]) -> dict[str, Path]:
 
 
 def resolve_mission_events(scenario: dict[str, Any]) -> dict[str, float]:
-    """Resolve mission event chains into absolute simulation times."""
+    """Return nominal FSW transition times from configured policy."""
     mission = scenario.get("mission", {})
     stage1_burn_s = float(
         scenario["vehicle"]["stages"][0]["propulsion"]["burn_duration_s"]
     )
-    definitions = mission.get("events")
-    if not isinstance(definitions, list) or not definitions:
-        raise ValueError("mission.events must contain at least one event")
+    policy = mission.get("flight_core", {})
+    separation_delay_s = float(policy["separation_delay_s"])
+    ignition_delay_s = float(policy["stage2_ignition_delay_s"])
+    return {
+        "burnout_stage_1": stage1_burn_s,
+        "stage_separation": stage1_burn_s + separation_delay_s,
+        "stage2_ignition": (
+            stage1_burn_s + separation_delay_s + ignition_delay_s
+        ),
+    }
 
-    pending: dict[str, tuple[str, float]] = {}
-    for index, definition in enumerate(definitions):
-        prefix = f"mission.events[{index}]"
-        if not isinstance(definition, dict):
-            raise ValueError(f"{prefix} must be an object")
-        event = definition.get("event")
-        trigger = definition.get("trigger")
-        delay = definition.get("delay")
-        if not isinstance(event, str) or not event:
-            raise ValueError(f"{prefix}.event must be a nonempty string")
-        if not isinstance(trigger, str) or not trigger:
-            raise ValueError(f"{prefix}.trigger must be a nonempty string")
-        if event == "burnout_stage_1" or event in pending:
-            raise ValueError(
-                f"mission.events contains duplicate event {event!r}"
-            )
-        if (
-            not isinstance(delay, (int, float))
-            or not math.isfinite(delay)
-            or delay < 0.0
-        ):
-            raise ValueError(f"{prefix}.delay must be finite and nonnegative")
-        pending[event] = (trigger, float(delay))
 
-    resolved = {"burnout_stage_1": stage1_burn_s}
-    while pending:
-        ready = [
-            event
-            for event, (trigger, _delay) in pending.items()
-            if trigger in resolved
-        ]
-        if not ready:
-            unresolved = ", ".join(sorted(pending))
-            raise ValueError(
-                f"mission.events has cyclic or unknown triggers: {unresolved}"
-            )
-        for event in ready:
-            trigger, delay = pending.pop(event)
-            resolved[event] = resolved[trigger] + delay
-
-    for required in ("stage_separation", "stage2_ignition"):
-        if required not in resolved:
-            raise ValueError(
-                f"mission.events is missing required event {required!r}"
-            )
-    if resolved["stage2_ignition"] < resolved["stage_separation"]:
-        raise ValueError(
-            "stage2_ignition cannot occur before stage_separation"
-        )
-    return resolved
+def mission_timeline(scenario: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the validated typed mission timeline."""
+    return list(scenario["mission"]["timeline"])
 
 
 def model_source_hash() -> str:

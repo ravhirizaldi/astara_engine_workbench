@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from typing import Any
 
-SCENARIO_SCHEMA_VERSION = "aerospace-workbench.scenario.v1"
+SCENARIO_SCHEMA_VERSION = "aerospace-workbench.scenario.v2"
 VEHICLE_SCHEMA_VERSION = "aerospace-workbench.vehicle.v2"
 RUN_SCHEMA_VERSION = "aerospace-workbench.run-manifest.v1"
 SENSOR_STREAM_SCHEMA_VERSION = "aerospace-workbench.sensor-stream.v1"
 CREDIBILITY_SCHEMA_VERSION = "aerospace-workbench.credibility.v2"
 ROCKETPY_REFERENCE_SCHEMA_VERSION = "aerospace-workbench.rocketpy-reference.v1"
 
-VEHICLE_KEYS = ("vehicle", "sensors", "avionics", "actuators")
+VEHICLE_KEYS = ("vehicle", "sensors", "avionics", "actuators", "flight_core")
 
 
 def require_schema_version(

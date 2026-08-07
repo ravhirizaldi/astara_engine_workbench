@@ -1,5 +1,5 @@
 {
-  "schema_version": "aerospace-workbench.scenario.v1",
+  "schema_version": "aerospace-workbench.scenario.v2",
   "name": "Anthariksa upper-stage engine cutoff",
   "vehicle_definition": "../vehicles/anthariksa_reference_vehicle.json",
   "simulation": {
@@ -30,38 +30,67 @@
     }
   },
   "mission": {
-    "events": [
+    "timeline": [
       {
-        "event": "stage_separation",
-        "trigger": "burnout_stage_1",
-        "delay": 0.5
+        "id": "arm_command",
+        "trigger": {"type": "time", "at_s": 0.025},
+        "action": {"type": "fsw_command", "command": "ARM", "target": "integrated_stack"}
       },
       {
-        "event": "stage2_ignition",
-        "trigger": "stage_separation",
-        "delay": 1.0
+        "id": "launch_command",
+        "trigger": {"type": "time", "at_s": 0.03},
+        "action": {"type": "fsw_command", "command": "LAUNCH", "target": "integrated_stack"}
+      },
+      {"id": "launch", "trigger": {"type": "fsw_fact", "fact": "launch"}, "action": {"type": "record"}},
+      {"id": "hold_down_released", "trigger": {"type": "truth_detector", "detector": "hold_down_released"}, "action": {"type": "record"}},
+      {"id": "rail_exit", "trigger": {"type": "truth_detector", "detector": "rail_exit"}, "action": {"type": "record"}},
+      {"id": "max_q", "trigger": {"type": "truth_detector", "detector": "max_q"}, "action": {"type": "record"}},
+      {"id": "meco", "trigger": {"type": "fsw_fact", "fact": "meco"}, "action": {"type": "record"}},
+      {"id": "stage_separation", "trigger": {"type": "fsw_fact", "fact": "stage_separation"}, "action": {"type": "split_stage"}},
+      {"id": "upper_clear_handoff_faults", "trigger": {"type": "after_event", "event": "stage_separation", "delay_s": 5.0}, "action": {"type": "fsw_command", "command": "CLEAR_FAULTS", "target": "upper_stage"}},
+      {"id": "stage2_ignition", "trigger": {"type": "fsw_fact", "fact": "stage2_ignition"}, "action": {"type": "record"}},
+      {"id": "stage2_first_cutoff", "trigger": {"type": "fsw_fact", "fact": "stage2_first_cutoff"}, "action": {"type": "record"}},
+      {"id": "stage2_second_ignition", "trigger": {"type": "fsw_fact", "fact": "stage2_second_ignition"}, "action": {"type": "record"}},
+      {"id": "orbit_insertion", "trigger": {"type": "fsw_fact", "fact": "orbit_insertion"}, "action": {"type": "record"}},
+      {"id": "payload_deploy", "trigger": {"type": "fsw_fact", "fact": "payload_deploy"}, "action": {"type": "separate_payload"}},
+      {"id": "drogue_deployed", "trigger": {"type": "fsw_fact", "fact": "drogue_deployed"}, "action": {"type": "deploy_recovery", "device": "drogue"}},
+      {"id": "main_deployed", "trigger": {"type": "fsw_fact", "fact": "main_deployed"}, "action": {"type": "deploy_recovery", "device": "main"}},
+      {"id": "landed", "trigger": {"type": "truth_detector", "detector": "landed"}, "action": {"type": "record"}},
+      {
+        "id": "upper_engine_cutoff_start",
+        "trigger": {"type": "after_event", "event": "stage2_ignition", "delay_s": 0.0},
+        "action": {"type": "set_fault", "fault_id": "upper_engine_cutoff", "state": "active"}
+      },
+      {
+        "id": "upper_engine_cutoff_end",
+        "trigger": {"type": "after_event", "event": "upper_engine_cutoff_start", "delay_s": 10.0},
+        "action": {"type": "set_fault", "fault_id": "upper_engine_cutoff", "state": "inactive"}
       }
     ],
+    "flight_core": {
+      "separation_delay_s": 2.0,
+      "stage2_ignition_delay_s": 6.0,
+      "stage2_first_burn_s": 15.0
+    },
+    "orbit": {"enabled": true, "target_altitude_m": 215000.0, "altitude_tolerance_m": 30000.0, "target_inclination_deg": 6.2, "inclination_tolerance_deg": 1.0, "cutoff_speed_margin_m_s": 1.0, "radial_velocity_tolerance_m_s": 150.0, "circularization_max_burn_s": 120.0, "circularization_guidance": "prograde"},
+    "payload": {"mass_kg": 20.0, "deploy_delay_s": 10.0, "separation_speed_m_s": 1.0, "separation_distance_m": 0.5, "propagation_time_s": 60.0, "length_m": 0.8, "diameter_m": 0.5, "inertia_kg_m2": [0.7, 1.2, 1.2], "drag_coefficient": 2.2},
     "separation_impulse_ns": 80.0,
-    "commands": [
-      {"time_s": 0.025, "command": "ARM"},
-      {"time_s": 0.03, "command": "LAUNCH"}
-    ],
     "attitude_schedule": [
       {"time_s": 0.0, "pitch_deg": 0.0, "azimuth_deg": 90.0},
-      {"time_s": 4.0, "pitch_deg": 4.0, "azimuth_deg": 90.0},
-      {"time_s": 12.0, "pitch_deg": 12.0, "azimuth_deg": 90.0},
-      {"time_s": 25.0, "pitch_deg": 18.0, "azimuth_deg": 90.0}
+      {"time_s": 20.0, "pitch_deg": 0.0, "azimuth_deg": 90.0},
+      {"time_s": 60.0, "pitch_deg": 20.0, "azimuth_deg": 90.0},
+      {"time_s": 120.0, "pitch_deg": 55.0, "azimuth_deg": 90.0},
+      {"time_s": 168.0, "pitch_deg": 77.75, "azimuth_deg": 90.0},
+      {"time_s": 220.0, "pitch_deg": 90.0, "azimuth_deg": 90.0}
     ]
   },
   "faults": [
     {
+      "id": "upper_engine_cutoff",
       "body": "upper_stage",
       "component": "engine",
       "engine_id": "cendrawasih-upper-01",
-      "type": "cutoff",
-      "start_s": 9.5,
-      "duration_s": 10.0
+      "type": "cutoff"
     }
   ],
   "uncertainty": {

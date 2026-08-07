@@ -13,6 +13,14 @@ from .schemas import (
 from .scenarios import resolve_mission_events
 
 
+def _number(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
 def _reject_nonfinite_numbers(value: Any, path: str = "scenario") -> None:
     if isinstance(value, float) and not math.isfinite(value):
         raise ValueError(f"{path} must be finite")
@@ -27,7 +35,7 @@ def _reject_nonfinite_numbers(value: Any, path: str = "scenario") -> None:
 def _positive(mapping: dict[str, Any], names: tuple[str, ...], prefix: str) -> None:
     for name in names:
         value = mapping.get(name)
-        if not isinstance(value, (int, float)) or value <= 0:
+        if not _number(value) or value <= 0:
             raise ValueError(f"{prefix}.{name} must be positive")
 
 
@@ -36,7 +44,7 @@ def _nonnegative(
 ) -> None:
     for name in names:
         value = mapping.get(name)
-        if not isinstance(value, (int, float)) or value < 0:
+        if not _number(value) or value < 0:
             raise ValueError(f"{prefix}.{name} must be nonnegative")
 
 
@@ -54,7 +62,7 @@ def _validate_table(
             raise ValueError(f"{prefix}[{index}] must be an object")
         for name in (independent, *required):
             value = row.get(name)
-            if not isinstance(value, (int, float)) or not math.isfinite(value):
+            if not _number(value):
                 raise ValueError(f"{prefix}[{index}].{name} must be finite")
         current = float(row[independent])
         if current <= previous:
@@ -97,7 +105,7 @@ def _validate_engines(stage: dict[str, Any], prefix: str) -> float:
                 not isinstance(vector, list)
                 or len(vector) != 3
                 or any(
-                    not isinstance(value, (int, float)) or not math.isfinite(value)
+                    not _number(value)
                     for value in vector
                 )
             ):
@@ -106,7 +114,7 @@ def _validate_engines(stage: dict[str, Any], prefix: str) -> float:
             raise ValueError(f"{engine_prefix}.direction_body cannot be zero")
 
         scale = engine.get("performance_scale", 1.0)
-        if not isinstance(scale, (int, float)) or not math.isfinite(scale) or scale < 0.0:
+        if not _number(scale) or scale < 0.0:
             raise ValueError(f"{engine_prefix}.performance_scale must be finite and nonnegative")
         if not isinstance(engine.get("enabled", True), bool):
             raise ValueError(f"{engine_prefix}.enabled must be boolean")
@@ -157,7 +165,7 @@ def validate_scenario(scenario: dict[str, Any]) -> None:
         "telemetry_sample_percent", 2.0
     )
     if (
-        not isinstance(telemetry_sample_percent, (int, float))
+        not _number(telemetry_sample_percent)
         or not 0.0 <= telemetry_sample_percent <= 100.0
     ):
         raise ValueError(
@@ -166,16 +174,16 @@ def validate_scenario(scenario: dict[str, Any]) -> None:
     environment = scenario.get("environment", {})
     latitude = environment.get("latitude_deg")
     longitude = environment.get("longitude_deg")
-    if not isinstance(latitude, (int, float)) or not -90 <= latitude <= 90:
+    if not _number(latitude) or not -90 <= latitude <= 90:
         raise ValueError("environment.latitude_deg must be between -90 and 90")
-    if not isinstance(longitude, (int, float)) or not -180 <= longitude <= 180:
+    if not _number(longitude) or not -180 <= longitude <= 180:
         raise ValueError("environment.longitude_deg must be between -180 and 180")
     wind = environment.get("wind_ned_m_s")
     if (
         not isinstance(wind, list)
         or len(wind) != 3
         or any(
-            not isinstance(value, (int, float)) or isinstance(value, bool)
+            not _number(value)
             for value in wind
         )
     ):
@@ -236,6 +244,22 @@ def validate_scenario(scenario: dict[str, Any]) -> None:
                 ):
                     if float(row[name]) < 0.0:
                         raise ValueError(f"{curve_prefix}[{row_index}].{name} cannot be negative")
+                expected_thrust_n = (
+                    float(row["fuel_flow_kg_s"])
+                    + float(row["oxidizer_flow_kg_s"])
+                ) * (
+                    float(propulsion["c_star_m_s"])
+                    * float(propulsion["thrust_coefficient"])
+                    * float(propulsion["nozzle_efficiency"])
+                )
+                thrust_n = float(row["thrust_n"])
+                if abs(thrust_n - expected_thrust_n) > 0.02 * max(
+                    thrust_n, expected_thrust_n, 1.0
+                ):
+                    raise ValueError(
+                        f"{curve_prefix}[{row_index}].thrust_n is inconsistent "
+                        "with propellant flow and declared performance"
+                    )
             fuel_required = _integral(curve, "fuel_flow_kg_s")
             oxidizer_required = _integral(curve, "oxidizer_flow_kg_s")
         else:
@@ -245,9 +269,9 @@ def validate_scenario(scenario: dict[str, Any]) -> None:
             )
         fuel_required *= engine_performance_scale
         oxidizer_required *= engine_performance_scale
-        if fuel_required > stage["fuel_mass_kg"] * 1.02:
+        if fuel_required > float(stage["fuel_mass_kg"]) + 1e-9:
             raise ValueError(f"{prefix} does not contain enough fuel")
-        if oxidizer_required > stage["oxidizer_mass_kg"] * 1.02:
+        if oxidizer_required > float(stage["oxidizer_mass_kg"]) + 1e-9:
             raise ValueError(f"{prefix} does not contain enough oxidizer")
         mass_properties = stage.get("mass_properties")
         if mass_properties is not None:
@@ -269,7 +293,7 @@ def validate_scenario(scenario: dict[str, Any]) -> None:
                     not isinstance(inertia, list)
                     or len(inertia) != 3
                     or any(
-                        not isinstance(value, (int, float)) or value <= 0.0
+                        not _number(value) or value <= 0.0
                         for value in inertia
                     )
                 ):
@@ -323,8 +347,7 @@ def validate_scenario(scenario: dict[str, Any]) -> None:
     _positive(rail, ("length_m",), "environment.launch_rail")
     friction = rail.get("friction_coefficient")
     if (
-        not isinstance(friction, (int, float))
-        or isinstance(friction, bool)
+        not _number(friction)
         or friction < 0.0
     ):
         raise ValueError(
@@ -336,8 +359,7 @@ def validate_scenario(scenario: dict[str, Any]) -> None:
         not isinstance(buttons, list)
         or len(buttons) < 2
         or any(
-            not isinstance(value, (int, float))
-            or isinstance(value, bool)
+            not _number(value)
             or not 0.0 <= float(value) <= stacked_length_m
             for value in buttons
         )
@@ -374,6 +396,261 @@ def validate_scenario(scenario: dict[str, Any]) -> None:
 
     mission = scenario.get("mission", {})
     _positive(mission, ("separation_impulse_ns",), "mission")
+    faults = scenario.get("faults", [])
+    if not isinstance(faults, list):
+        raise ValueError("faults must be a list")
+    fault_ids: set[str] = set()
+    bodies = {"all", "integrated_stack", "core_stage", "upper_stage"}
+    sensor_fault_types = {
+        "dropout", "stale", "freeze", "stuck-valid", "bias", "scale_error"
+    }
+    device_fault_types = {"dropout", "freeze", "stuck"}
+    engine_fault_types = {"cutoff", "thrust_scale", "overtemperature"}
+    engine_ids = {
+        engine["id"]
+        for stage in stages
+        for engine in stage.get("engines", [])
+    }
+    for index, fault in enumerate(faults):
+        prefix = f"faults[{index}]"
+        if not isinstance(fault, dict):
+            raise ValueError(f"{prefix} must be an object")
+        identifier = fault.get("id")
+        if not isinstance(identifier, str) or not identifier:
+            raise ValueError(f"{prefix}.id must be a nonempty string")
+        if identifier in fault_ids:
+            raise ValueError(f"faults contains duplicate id {identifier!r}")
+        if "start_s" in fault or "duration_s" in fault:
+            raise ValueError(
+                f"{prefix} timing must be declared in mission.timeline"
+            )
+        if fault.get("body") not in bodies:
+            raise ValueError(f"{prefix}.body must name a supported body")
+        fault_type = fault.get("type")
+        if "sensor" in fault:
+            if fault["sensor"] not in {"imu", "magnetometer", "barometer", "gnss"}:
+                raise ValueError(f"{prefix}.sensor is not supported")
+            if fault_type not in sensor_fault_types:
+                raise ValueError(f"{prefix}.type is not supported for sensors")
+            channel = fault.get("channel", 0)
+            if (
+                not isinstance(channel, int)
+                or isinstance(channel, bool)
+                or not 0 <= channel < int(scenario["sensors"]["channel_count"])
+            ):
+                raise ValueError(f"{prefix}.channel is outside the sensor suite")
+        elif fault.get("component") == "engine":
+            if fault_type not in engine_fault_types:
+                raise ValueError(f"{prefix}.type is not supported for engines")
+            if fault.get("engine_id") not in engine_ids | {"all"}:
+                raise ValueError(f"{prefix}.engine_id is not configured")
+        elif fault.get("component") in {
+            "air_data_computer",
+            "engine_controller",
+            "discrete_input_module",
+            "recovery_controller",
+            "flight_computer_platform",
+        }:
+            if fault_type not in device_fault_types:
+                raise ValueError(f"{prefix}.type is not supported for devices")
+        else:
+            raise ValueError(f"{prefix} must name a supported sensor or component")
+        if fault_type in {"bias", "scale_error", "thrust_scale", "overtemperature"}:
+            if not _number(fault.get("value")):
+                raise ValueError(f"{prefix}.value must be finite and numeric")
+        fault_ids.add(identifier)
+    timeline = mission.get("timeline")
+    if not isinstance(timeline, list) or not timeline:
+        raise ValueError("mission.timeline must contain at least one event")
+    identifiers: set[str] = set()
+    dependencies: dict[str, str] = {}
+    trigger_types = {"time", "after_event", "fsw_fact", "truth_detector"}
+    action_types = {
+        "fsw_command",
+        "set_fault",
+        "record",
+        "split_stage",
+        "deploy_recovery",
+        "separate_payload",
+        "complete_mission",
+    }
+    allowed_commands = {"ARM", "DISARM", "LAUNCH", "ABORT", "CLEAR_FAULTS"}
+    fsw_facts = {
+        "launch",
+        "meco",
+        "stage_separation",
+        "stage2_ignition",
+        "stage2_first_cutoff",
+        "stage2_second_ignition",
+        "orbit_insertion",
+        "payload_deploy",
+        "drogue_deployed",
+        "main_deployed",
+    }
+    truth_detectors = {"hold_down_released", "rail_exit", "max_q", "landed"}
+    for index, entry in enumerate(timeline):
+        prefix = f"mission.timeline[{index}]"
+        if not isinstance(entry, dict):
+            raise ValueError(f"{prefix} must be an object")
+        identifier = entry.get("id")
+        trigger = entry.get("trigger")
+        action = entry.get("action")
+        if not isinstance(identifier, str) or not identifier:
+            raise ValueError(f"{prefix}.id must be a nonempty string")
+        if identifier in identifiers:
+            raise ValueError(
+                f"mission.timeline contains duplicate id {identifier!r}"
+            )
+        identifiers.add(identifier)
+        if not isinstance(trigger, dict) or trigger.get("type") not in trigger_types:
+            raise ValueError(
+                f"{prefix}.trigger.type must be one of {sorted(trigger_types)}"
+            )
+        if not isinstance(action, dict) or action.get("type") not in action_types:
+            raise ValueError(
+                f"{prefix}.action.type must be one of {sorted(action_types)}"
+            )
+        trigger_type = trigger["type"]
+        if trigger_type == "time":
+            at_s = trigger.get("at_s")
+            if (
+                not _number(at_s)
+                or at_s < 0.0
+            ):
+                raise ValueError(f"{prefix}.trigger.at_s must be nonnegative")
+        elif trigger_type == "after_event":
+            event_id = trigger.get("event")
+            delay_s = trigger.get("delay_s")
+            if not isinstance(event_id, str) or not event_id:
+                raise ValueError(f"{prefix}.trigger.event must be nonempty")
+            if (
+                not _number(delay_s)
+                or delay_s < 0.0
+            ):
+                raise ValueError(
+                    f"{prefix}.trigger.delay_s must be nonnegative"
+                )
+            dependencies[identifier] = event_id
+        else:
+            key = "fact" if trigger_type == "fsw_fact" else "detector"
+            if not isinstance(trigger.get(key), str) or not trigger[key]:
+                raise ValueError(f"{prefix}.trigger.{key} must be nonempty")
+            allowed = fsw_facts if trigger_type == "fsw_fact" else truth_detectors
+            if trigger[key] not in allowed:
+                raise ValueError(f"{prefix}.trigger.{key} is not supported")
+        if action["type"] == "fsw_command":
+            if action.get("command") not in allowed_commands:
+                raise ValueError(
+                    f"{prefix}.action.command must be one of "
+                    f"{sorted(allowed_commands)}"
+                )
+            if action.get("target") not in bodies - {"all"}:
+                raise ValueError(f"{prefix}.action.target must be a supported body")
+        if action["type"] == "set_fault":
+            if action.get("fault_id") not in fault_ids:
+                raise ValueError(
+                    f"{prefix}.action.fault_id must reference a fault"
+                )
+            if action.get("state") not in {"active", "inactive"}:
+                raise ValueError(
+                    f"{prefix}.action.state must be active or inactive"
+                )
+        if (
+            action["type"] == "deploy_recovery"
+            and action.get("device") not in {"drogue", "main"}
+        ):
+            raise ValueError(f"{prefix}.action.device must be drogue or main")
+    for identifier, dependency in dependencies.items():
+        if dependency not in identifiers:
+            raise ValueError(
+                f"mission.timeline event {identifier!r} references "
+                f"unknown event {dependency!r}"
+            )
+        seen = {identifier}
+        current = dependency
+        while current in dependencies:
+            if current in seen:
+                raise ValueError("mission.timeline contains a dependency cycle")
+            seen.add(current)
+            current = dependencies[current]
+    policy = mission.get("flight_core")
+    if not isinstance(policy, dict):
+        raise ValueError("mission.flight_core must be an object")
+    _nonnegative(
+        policy,
+        ("separation_delay_s", "stage2_ignition_delay_s"),
+        "mission.flight_core",
+    )
+    _positive(
+        policy,
+        ("stage2_first_burn_s",),
+        "mission.flight_core",
+    )
+    if float(policy["stage2_first_burn_s"]) >= float(
+        stages[1]["propulsion"]["burn_duration_s"]
+    ):
+        raise ValueError(
+            "mission.flight_core.stage2_first_burn_s must leave "
+            "propellant time for circularization"
+        )
+    orbit = mission.get("orbit")
+    if not isinstance(orbit, dict) or not isinstance(
+        orbit.get("enabled"), bool
+    ):
+        raise ValueError("mission.orbit.enabled must be boolean")
+    _positive(
+        orbit,
+        (
+            "target_altitude_m",
+            "altitude_tolerance_m",
+            "target_inclination_deg",
+            "inclination_tolerance_deg",
+            "cutoff_speed_margin_m_s",
+            "circularization_max_burn_s",
+        ),
+        "mission.orbit",
+    )
+    _nonnegative(
+        orbit,
+        (
+            "cutoff_speed_margin_m_s",
+            "radial_velocity_tolerance_m_s",
+        ),
+        "mission.orbit",
+    )
+    if orbit.get("circularization_guidance") != "prograde":
+        raise ValueError(
+            "mission.orbit.circularization_guidance must be prograde"
+        )
+    payload = mission.get("payload")
+    if not isinstance(payload, dict):
+        raise ValueError("mission.payload must be an object")
+    _positive(
+        payload,
+        (
+            "mass_kg",
+            "separation_speed_m_s",
+            "separation_distance_m",
+            "propagation_time_s",
+            "length_m",
+            "diameter_m",
+            "drag_coefficient",
+        ),
+        "mission.payload",
+    )
+    _nonnegative(payload, ("deploy_delay_s",), "mission.payload")
+    inertia = payload.get("inertia_kg_m2")
+    if (
+        not isinstance(inertia, list)
+        or len(inertia) != 3
+        or any(
+            not _number(value) or value <= 0.0
+            for value in inertia
+        )
+    ):
+        raise ValueError(
+            "mission.payload.inertia_kg_m2 requires three positive values"
+        )
     resolve_mission_events(scenario)
     schedule = mission.get("attitude_schedule")
     if not isinstance(schedule, list) or not 2 <= len(schedule) <= 32:
@@ -384,39 +661,13 @@ def validate_scenario(scenario: dict[str, Any]) -> None:
             raise ValueError(f"mission.attitude_schedule[{index}] must be an object")
         for name in ("time_s", "pitch_deg", "azimuth_deg"):
             value = point.get(name)
-            if not isinstance(value, (int, float)) or not math.isfinite(value):
+            if not _number(value):
                 raise ValueError(
                     f"mission.attitude_schedule[{index}].{name} must be finite"
                 )
         if previous_time is not None and point["time_s"] <= previous_time:
             raise ValueError("mission.attitude_schedule times must strictly increase")
         previous_time = point["time_s"]
-    commands = mission.get("commands", [])
-    if not isinstance(commands, list):
-        raise ValueError("mission.commands must be a list")
-    previous_command_time = None
-    allowed_commands = {"ARM", "DISARM", "LAUNCH", "ABORT", "CLEAR_FAULTS"}
-    for index, command in enumerate(commands):
-        if not isinstance(command, dict):
-            raise ValueError(f"mission.commands[{index}] must be an object")
-        time_s = command.get("time_s")
-        command_name = command.get("command")
-        if (
-            not isinstance(time_s, (int, float))
-            or not math.isfinite(time_s)
-            or time_s < 0.0
-        ):
-            raise ValueError(
-                f"mission.commands[{index}].time_s must be finite and nonnegative"
-            )
-        if command_name not in allowed_commands:
-            raise ValueError(
-                f"mission.commands[{index}].command must be one of "
-                f"{sorted(allowed_commands)}"
-            )
-        if previous_command_time is not None and time_s <= previous_command_time:
-            raise ValueError("mission.commands times must strictly increase")
-        previous_command_time = time_s
 
     actuators = scenario.get("actuators", {})
     _positive(
@@ -511,11 +762,86 @@ def validate_scenario(scenario: dict[str, Any]) -> None:
     ):
         value = sensors.get(name)
         if (
-            not isinstance(value, (int, float))
+            not _number(value)
             or value < 0.0
-            or not math.isfinite(value)
         ):
             raise ValueError(f"sensors.{name} must be finite and nonnegative")
+    _positive(
+        sensors,
+        (
+            "accelerometer_saturation_m_s2",
+            "gyro_saturation_rad_s",
+            "magnetometer_saturation",
+            "barometer_lag_time_constant_s",
+            "barometer_port_time_constant_s",
+            "nominal_sensor_temperature_k",
+        ),
+        "sensors",
+    )
+    _nonnegative(
+        sensors,
+        (
+            "accelerometer_bias_random_walk_m_s2_sqrt_s",
+            "gyro_bias_random_walk_rad_s_sqrt_s",
+            "accelerometer_quantization_m_s2",
+            "gyro_quantization_rad_s",
+            "accelerometer_vibration_sensitivity",
+            "gyro_vibration_sensitivity",
+            "engine_temperature_coupling",
+            "magnetometer_bias_random_walk_sqrt_s",
+            "magnetometer_quantization",
+            "barometer_bias_random_walk_m_sqrt_s",
+            "barometer_quantization_m",
+            "gnss_position_bias_random_walk_m_sqrt_s",
+            "gnss_velocity_bias_random_walk_m_s_sqrt_s",
+            "gnss_position_quantization_m",
+            "gnss_velocity_quantization_m_s",
+            "gnss_acquisition_time_s",
+            "gnss_reacquisition_time_s",
+        ),
+        "sensors",
+    )
+    for name in (
+        "accelerometer_scale_factor_error",
+        "gyro_scale_factor_error",
+        "accelerometer_temperature_coefficient_m_s2_k",
+        "gyro_temperature_coefficient_rad_s_k",
+        "imu_lever_arm_body_m",
+        "magnetometer_scale_factor_error",
+        "magnetometer_temperature_coefficient_k",
+        "gnss_position_scale_factor_error",
+        "gnss_velocity_scale_factor_error",
+    ):
+        values = sensors.get(name)
+        if (
+            not isinstance(values, list)
+            or len(values) != 3
+            or any(not _number(value) for value in values)
+        ):
+            raise ValueError(f"sensors.{name} requires three numeric values")
+    for name in (
+        "imu_cross_axis_misalignment",
+        "magnetometer_cross_axis_misalignment",
+    ):
+        matrix = sensors.get(name)
+        if (
+            not isinstance(matrix, list)
+            or len(matrix) != 3
+            or any(
+                not isinstance(row, list)
+                or len(row) != 3
+                or any(not _number(value) for value in row)
+                for row in matrix
+            )
+        ):
+            raise ValueError(f"sensors.{name} requires a 3x3 numeric matrix")
+    if (
+        float(sensors["barometer_min_altitude_m"])
+        >= float(sensors["barometer_max_altitude_m"])
+    ):
+        raise ValueError(
+            "sensors.barometer_min_altitude_m must be below the maximum"
+        )
     fsw_step_s = 1.0 / float(sensors["imu_rate_hz"])
     if simulation["time_step_s"] > fsw_step_s + 1e-12:
         raise ValueError(
@@ -570,7 +896,7 @@ def validate_scenario(scenario: dict[str, Any]) -> None:
                 )
             for field in timing_fields - {"drop_on_deadline_miss"}:
                 value = profile[field]
-                if not isinstance(value, (int, float)) or isinstance(value, bool):
+                if not _number(value):
                     raise ValueError(f"{prefix}.{field} must be numeric")
             for field in (
                 "sample_rate_hz",
@@ -618,9 +944,7 @@ def validate_scenario(scenario: dict[str, Any]) -> None:
         ):
             value = profile[field]
             if (
-                not isinstance(value, (int, float))
-                or isinstance(value, bool)
-                or not math.isfinite(value)
+                not _number(value)
             ):
                 raise ValueError(f"{prefix}.{field} must be finite and numeric")
         if float(profile["quantization"]) < 0.0:
@@ -670,5 +994,5 @@ def validate_scenario(scenario: dict[str, Any]) -> None:
     for name, value in uncertainty.items():
         if name == "basis":
             continue
-        if not isinstance(value, (int, float)) or value < 0.0 or not math.isfinite(value):
+        if not _number(value) or value < 0.0:
             raise ValueError(f"uncertainty.{name} must be finite and nonnegative")

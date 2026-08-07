@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
 
-from ..configuration.scenarios import resolve_mission_events
 from ..configuration.schemas import SENSOR_STREAM_SCHEMA_VERSION
 from .abi import (
     FSW_ABI_VERSION,
@@ -423,7 +422,6 @@ class FlightCore:
         library.fsw_destroy.argtypes = [ctypes.c_void_p]
         stages = scenario["vehicle"]["stages"]
         mission = scenario["mission"]
-        event_times = resolve_mission_events(scenario)
         actuators = scenario["actuators"]
         schedule = mission["attitude_schedule"]
         if len(schedule) > FSW_MAX_GUIDANCE_POINTS:
@@ -432,11 +430,6 @@ class FlightCore:
             )
         sensors = scenario["sensors"]
         devices = scenario["avionics"]["devices"]
-        accelerometer_noise = float(sensors["accelerometer_noise_m_s2"])
-        gyro_noise = float(sensors["gyro_noise_rad_s"])
-        barometer_noise = float(sensors["barometer_noise_m"])
-        gnss_position_noise = float(sensors["gnss_position_noise_m"])
-        gnss_velocity_noise = float(sensors["gnss_velocity_noise_m_s"])
         guidance = (GuidancePoint * FSW_MAX_GUIDANCE_POINTS)()
         for index, point in enumerate(schedule):
             guidance[index] = GuidancePoint(
@@ -449,13 +442,30 @@ class FlightCore:
         config.abi_version = FSW_ABI_VERSION
         config.struct_size = ctypes.sizeof(FswConfig)
         config.stage1_burn_s = stages[0]["propulsion"]["burn_duration_s"]
-        config.separation_delay_s = (
-            event_times["stage_separation"] - event_times["burnout_stage_1"]
+        config.separation_delay_s = mission["flight_core"][
+            "separation_delay_s"
+        ]
+        config.stage2_ignition_delay_s = mission["flight_core"][
+            "stage2_ignition_delay_s"
+        ]
+        config.stage2_burn_s = mission["flight_core"].get(
+            "stage2_first_burn_s",
+            stages[1]["propulsion"]["burn_duration_s"],
         )
-        config.stage2_ignition_delay_s = (
-            event_times["stage2_ignition"] - event_times["stage_separation"]
-        )
-        config.stage2_burn_s = stages[1]["propulsion"]["burn_duration_s"]
+        orbit = mission.get("orbit", {})
+        config.orbit_enabled = int(bool(orbit.get("enabled", False)))
+        config.orbit_target_altitude_m = orbit["target_altitude_m"]
+        config.orbit_altitude_tolerance_m = orbit["altitude_tolerance_m"]
+        config.orbit_cutoff_speed_margin_m_s = orbit[
+            "cutoff_speed_margin_m_s"
+        ]
+        config.orbit_radial_velocity_tolerance_m_s = orbit[
+            "radial_velocity_tolerance_m_s"
+        ]
+        config.circularization_max_burn_s = orbit[
+            "circularization_max_burn_s"
+        ]
+        config.payload_deploy_delay_s = mission["payload"]["deploy_delay_s"]
         config.main_deploy_altitude_m = stages[recovery_index]["recovery"][
             "main_deploy_altitude_m"
         ]
@@ -463,27 +473,12 @@ class FlightCore:
         config.max_fin_rad = math.radians(actuators["max_fin_deg"])
         config.control_kp = actuators["tvc_kp"]
         config.control_kd = actuators["tvc_kd"]
-        config.imu_timeout_s = float(
-            sensors.get(
-                "imu_timeout_s",
-                max(3.0 / float(sensors["imu_rate_hz"]), 0.02),
-            )
-        )
+        config.imu_timeout_s = float(sensors["imu_timeout_s"])
         config.magnetometer_timeout_s = float(
             sensors["magnetometer_timeout_s"]
         )
-        config.barometer_timeout_s = float(
-            sensors.get(
-                "barometer_timeout_s",
-                max(3.0 / float(sensors["barometer_rate_hz"]), 0.05),
-            )
-        )
-        config.gnss_timeout_s = float(
-            sensors.get(
-                "gnss_timeout_s",
-                max(3.0 / float(sensors["gnss_rate_hz"]), 0.25),
-            )
-        )
+        config.barometer_timeout_s = float(sensors["barometer_timeout_s"])
+        config.gnss_timeout_s = float(sensors["gnss_timeout_s"])
         config.air_data_timeout_s = float(
             devices["air_data_computer"]["timeout_s"]
         )
@@ -499,103 +494,27 @@ class FlightCore:
         config.platform_status_timeout_s = float(
             devices["flight_computer_platform"]["timeout_s"]
         )
-        config.max_voter_sample_skew_s = float(
-            sensors.get("max_voter_sample_skew_s", 0.01)
-        )
-        config.acceleration_disagreement_m_s2 = float(
-            sensors.get(
-                "acceleration_disagreement_m_s2",
-                max(6.0 * accelerometer_noise, 0.5),
+        scalar_fields = {
+            name
+            for name, _ctype in FswConfig._fields_
+            if name
+            not in {
+                "abi_version",
+                "struct_size",
+                "guidance_count",
+                "guidance",
+                "body_role",
+            }
+        }
+        flight_core_config = scenario["flight_core"]
+        unknown = set(flight_core_config) - scalar_fields
+        if unknown:
+            raise ValueError(
+                "unknown flight_core configuration fields: "
+                + ", ".join(sorted(unknown))
             )
-        )
-        config.gyro_disagreement_rad_s = float(
-            sensors.get(
-                "gyro_disagreement_rad_s",
-                max(6.0 * gyro_noise, 0.01),
-            )
-        )
-        config.magnetic_disagreement = float(
-            sensors.get("magnetic_disagreement", 0.15)
-        )
-        config.barometer_disagreement_m = float(
-            sensors.get(
-                "barometer_disagreement_m",
-                max(6.0 * barometer_noise, 10.0),
-            )
-        )
-        config.gnss_position_disagreement_m = float(
-            sensors.get(
-                "gnss_position_disagreement_m",
-                max(6.0 * gnss_position_noise, 15.0),
-            )
-        )
-        config.gnss_velocity_disagreement_m_s = float(
-            sensors.get(
-                "gnss_velocity_disagreement_m_s",
-                max(6.0 * gnss_velocity_noise, 1.0),
-            )
-        )
-        config.cross_altitude_disagreement_m = float(
-            sensors.get(
-                "cross_altitude_disagreement_m",
-                max(
-                    6.0 * math.hypot(barometer_noise, gnss_position_noise),
-                    20.0,
-                ),
-            )
-        )
-        config.voter_reject_samples = int(sensors.get("voter_reject_samples", 3))
-        config.voter_recover_samples = int(sensors.get("voter_recover_samples", 5))
-        config.imu_loss_abort_delay_s = float(
-            sensors.get("imu_loss_abort_delay_s", 0.05)
-        )
-        config.gyro_bias_time_constant_s = float(
-            sensors.get("gyro_bias_time_constant_s", 2.0)
-        )
-        config.stationary_gyro_threshold_rad_s = float(
-            sensors.get("stationary_gyro_threshold_rad_s", 0.02)
-        )
-        config.altitude_filter_tau_s = float(
-            sensors.get("altitude_filter_tau_s", 0.20)
-        )
-        config.velocity_filter_tau_s = float(
-            sensors.get("velocity_filter_tau_s", 0.60)
-        )
-        config.command_timeout_s = 1.0
-        config.launch_confirm_timeout_s = 2.0
-        config.separation_confirm_timeout_s = 5.0
-        config.stage2_ignition_timeout_s = 5.0
-        config.drogue_confirm_timeout_s = 2.0
-        config.main_confirm_timeout_s = 2.0
-        config.fault_recovery_persistence_s = 0.25
-        config.min_step_s = 1e-6
-        config.max_step_s = 0.1
-        config.step_time_tolerance_s = float(
-            sensors.get("step_time_tolerance_s", 1e-6)
-        )
-        config.loop_deadline_s = 2.0 / float(sensors["imu_rate_hz"])
-        config.overrun_abort_count = 3
-        config.propulsion_abort_health_percent = 20.0
-        config.propulsion_abort_persistence_s = 0.05
-        config.max_acceleration_m_s2 = 500.0
-        config.max_gyro_rad_s = 20.0
-        config.min_magnetic_norm = 0.25
-        config.max_magnetic_norm = 2.0
-        config.min_barometer_altitude_m = -1_000.0
-        config.max_barometer_altitude_m = 2_000_000.0
-        config.max_barometer_rate_m_s = 5_000.0
-        config.min_gnss_radius_m = 5_000_000.0
-        config.max_gnss_radius_m = 8_000_000.0
-        config.max_gnss_speed_m_s = 15_000.0
-        config.max_gnss_velocity_rate_m_s2 = 1_000.0
-        config.accelerometer_process_sigma_m_s2 = max(accelerometer_noise, 0.01)
-        config.gyro_process_sigma_rad_s = max(gyro_noise, 1e-5)
-        config.barometer_sigma_m = max(barometer_noise, 0.1)
-        config.gnss_altitude_sigma_m = max(gnss_position_noise, 0.1)
-        config.gnss_velocity_sigma_m_s = max(gnss_velocity_noise, 0.01)
-        config.max_altitude_sigma_m = 500.0
-        config.max_velocity_sigma_m_s = 200.0
-        config.max_attitude_sigma_rad = 1.0
+        for name, value in flight_core_config.items():
+            setattr(config, name, value)
         config.launch_azimuth_rad = math.radians(
             float(schedule[0]["azimuth_deg"])
         )

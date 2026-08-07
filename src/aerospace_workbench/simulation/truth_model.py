@@ -68,8 +68,13 @@ class Body:
     upper_mass_kg: float = 0.0
     stacked_length_m: float | None = None
     attached_stage: dict[str, Any] | None = None
+    attached_payload_mass_kg: float = 0.0
+    attached_payload_position_m: float = 0.0
     landed: bool = False
     engine_started_s: float | None = None
+    engine_ignition_s: float | None = None
+    engine_burn_elapsed_s: float = 0.0
+    engine_running: bool = False
     engine_health_percent: float = 100.0
     drogue_deployed: bool = False
     main_deployed: bool = False
@@ -119,6 +124,7 @@ class Body:
             + self.fuel_kg
             + self.oxidizer_kg
             + self.upper_mass_kg
+            + self.attached_payload_mass_kg
         )
 
     @property
@@ -126,6 +132,8 @@ class Body:
         initial = float(self.stage["fuel_mass_kg"]) + float(
             self.stage["oxidizer_mass_kg"]
         )
+        if initial <= 0.0:
+            return 0.0
         return min(
             max((self.fuel_kg + self.oxidizer_kg) / initial, 0.0), 1.0
         )
@@ -135,24 +143,39 @@ class Body:
         own_center = stage_center_of_mass_m(
             self.stage, self.propellant_fraction
         )
-        if self.attached_stage is None or self.upper_mass_kg <= 0.0:
-            return own_center
-        attached_fraction = stage_propellant_fraction(
-            self.attached_stage, self.upper_mass_kg
-        )
-        attached_center = float(self.stage["length_m"]) + (
-            stage_center_of_mass_m(self.attached_stage, attached_fraction)
-        )
-        own_mass = self.mass_kg - self.upper_mass_kg
-        return (
-            own_mass * own_center + self.upper_mass_kg * attached_center
-        ) / self.mass_kg
+        structural_mass = self.mass_kg - self.attached_payload_mass_kg
+        own_mass = structural_mass - self.upper_mass_kg
+        moment = own_mass * own_center
+        if self.attached_stage is not None and self.upper_mass_kg > 0.0:
+            attached_fraction = stage_propellant_fraction(
+                self.attached_stage, self.upper_mass_kg
+            )
+            attached_center = float(self.stage["length_m"]) + (
+                stage_center_of_mass_m(
+                    self.attached_stage, attached_fraction
+                )
+            )
+            moment += self.upper_mass_kg * attached_center
+        if self.attached_payload_mass_kg > 0.0:
+            moment += (
+                self.attached_payload_mass_kg
+                * self.attached_payload_position_m
+            )
+        return moment / self.mass_kg
 
     @property
     def inertia_kg_m2(self) -> np.ndarray:
-        inertia = stage_inertia_kg_m2(
+        own_inertia = stage_inertia_kg_m2(
             self.stage, self.propellant_fraction
         )
+        structural_mass = self.mass_kg - self.attached_payload_mass_kg
+        own_mass = structural_mass - self.upper_mass_kg
+        own_center = stage_center_of_mass_m(
+            self.stage, self.propellant_fraction
+        )
+        combined_center = self.center_of_mass_m
+        inertia = own_inertia.copy()
+        inertia[1:] += own_mass * (own_center - combined_center) ** 2
         if self.attached_stage is not None and self.upper_mass_kg > 0.0:
             attached_fraction = stage_propellant_fraction(
                 self.attached_stage, self.upper_mass_kg
@@ -160,22 +183,20 @@ class Body:
             attached_inertia = stage_inertia_kg_m2(
                 self.attached_stage, attached_fraction
             )
-            own_mass = self.mass_kg - self.upper_mass_kg
-            own_center = stage_center_of_mass_m(
-                self.stage, self.propellant_fraction
-            )
             attached_center = float(self.stage["length_m"]) + (
                 stage_center_of_mass_m(
                     self.attached_stage, attached_fraction
                 )
             )
-            combined_center = self.center_of_mass_m
             inertia = inertia + attached_inertia
             inertia[1:] += (
-                own_mass * (own_center - combined_center) ** 2
-                + self.upper_mass_kg
+                self.upper_mass_kg
                 * (attached_center - combined_center) ** 2
             )
+        if self.attached_payload_mass_kg > 0.0:
+            inertia[1:] += self.attached_payload_mass_kg * (
+                self.attached_payload_position_m - combined_center
+            ) ** 2
         return np.maximum(inertia, 1e-3)
 
     def aerodynamic_stage(self) -> dict[str, Any]:

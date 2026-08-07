@@ -86,6 +86,7 @@ def _metrics(result: RunResult) -> dict[str, Any]:
     impacts = result.manifest.get("impact_points", {})
     core_impact = impacts.get("core_stage", {})
     upper_impact = impacts.get("upper_stage", {})
+    orbit_mission = "orbit_insertion" in result.manifest.get("checks", {})
     return {
         "maximum_altitude_m": float(result.manifest["maximum_altitude_m"]),
         "maximum_mach": float(
@@ -142,8 +143,20 @@ def _metrics(result: RunResult) -> dict[str, Any]:
             )
         ),
         "duration_s": float(result.manifest["duration_s"]),
-        "stage1_burnout_time_s": _event_time(result, "burnout_stage_1"),
-        "stage2_burnout_time_s": _event_time(result, "burnout_stage_2"),
+        "stage1_burnout_time_s": (
+            _event_time(result, "meco")
+            if _event_time(result, "meco") is not None
+            else _event_time(result, "burnout_stage_1")
+        ),
+        "stage2_burnout_time_s": (
+            _event_time(result, "orbit_insertion")
+            if orbit_mission
+            else (
+                _event_time(result, "stage2_first_cutoff")
+                if _event_time(result, "stage2_first_cutoff") is not None
+                else _event_time(result, "burnout_stage_2")
+            )
+        ),
         "core_impact_latitude_deg": core_impact.get("latitude_deg"),
         "core_impact_longitude_deg": core_impact.get("longitude_deg"),
         "upper_impact_latitude_deg": upper_impact.get("latitude_deg"),
@@ -209,11 +222,10 @@ def _sample_scenario(
                 for value in row["inertia_kg_m2"]
             ]
         curve = stage["propulsion"].get("performance_curve")
+        stage["propulsion"]["nozzle_efficiency"] *= factors["thrust_scale"]
         if curve:
             for row in curve:
                 row["thrust_n"] *= factors["thrust_scale"]
-        else:
-            stage["propulsion"]["nozzle_efficiency"] *= factors["thrust_scale"]
         table = stage.get("aerodynamics", {}).get("coefficient_table")
         if table:
             for row in table:
@@ -227,9 +239,11 @@ def _sample_scenario(
             sampled["environment"]["wind_ned_m_s"], wind_offsets, strict=True
         )
     ]
-    for event in sampled["mission"]["events"]:
-        event["delay"] = max(
-            0.0, float(event["delay"]) + factors["timing_offset_s"]
+    for name in ("separation_delay_s", "stage2_ignition_delay_s"):
+        sampled["mission"]["flight_core"][name] = max(
+            0.0,
+            float(sampled["mission"]["flight_core"][name])
+            + factors["timing_offset_s"],
         )
     validate_scenario(sampled)
     return sampled, factors
